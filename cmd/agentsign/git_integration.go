@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/KIFFCollective/agentsign/internal/credential"
@@ -173,36 +175,103 @@ func (a *app) cmdEnv(args []string) error {
 	return nil
 }
 
+// EnvRealGit is set for git's children, so nested git calls through the shim
+// go straight to the real binary.
+const EnvRealGit = "AGENTSIGN_REAL_GIT"
+
 // cmdGit runs the real git with the agent's identity in the environment.
 func (a *app) cmdGit(args []string) error {
 	_, ag, err := a.currentAgent()
 	if err != nil {
 		return err
 	}
-	gitBin, err := exec.LookPath("git")
+	return a.runGit(args, ag)
+}
+
+// isGitShim reports whether agentsign was invoked under the name git, e.g.
+// through a symlink /usr/local/bin/git -> agentsign placed ahead of the real
+// git on PATH. Every git call then goes through agentsign.
+func isGitShim(argv0 string) bool {
+	b := strings.ToLower(filepath.Base(argv0))
+	return b == "git" || b == "git.exe"
+}
+
+// cmdGitShim is `agentsign git` for shim invocations, except that with no
+// agent identified it runs the real git unchanged, so humans and build
+// steps in the same container are unaffected.
+func (a *app) cmdGitShim(args []string) error {
+	_, ag, err := a.currentAgent()
+	switch {
+	case errors.Is(err, resolve.ErrNoAgent):
+		ag = nil
+	case err != nil:
+		a.warnf("git: %v; running git without an agent identity", err)
+		ag = nil
+	}
+	return a.runGit(args, ag)
+}
+
+// runGit runs the real git. With an agent, it sets the agent's identity and
+// adds the Agent trailer to commits.
+func (a *app) runGit(args []string, ag *store.Agent) error {
+	gitBin, err := a.realGit()
 	if err != nil {
 		return err
 	}
-	if self, err := os.Executable(); err == nil && sameFile(self, gitBin) {
-		return errors.New("the git on PATH is agentsign itself; refusing to recurse")
+	env := append(os.Environ(), EnvRealGit+"="+gitBin)
+	if ag != nil {
+		ident := identityEnv(ag)
+		args = injectTrailer(args, verify.Trailer(ident[0][1], ag.Email))
+		for _, kv := range ident {
+			env = append(env, kv[0]+"="+kv[1])
+		}
+		// Pin the agent so the helper and signer agree with this identity
+		// even if detection would otherwise differ (e.g. git -C elsewhere).
+		env = append(env, "AGENTSIGN_AGENT="+ag.ID)
 	}
-	ident := identityEnv(ag)
-	args = injectTrailer(args, verify.Trailer(ident[0][1], ag.Email))
 	cmd := exec.Command(gitBin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = a.stdin, a.stdout, a.stderr
-	cmd.Env = os.Environ()
-	for _, kv := range identityEnv(ag) {
-		cmd.Env = append(cmd.Env, kv[0]+"="+kv[1])
-	}
-	// Pin the agent so the helper and signer agree with this identity even
-	// if detection would otherwise differ (e.g. git -C elsewhere).
-	cmd.Env = append(cmd.Env, "AGENTSIGN_AGENT="+ag.ID)
+	cmd.Env = env
 	err = cmd.Run()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return exitError(ee.ExitCode())
 	}
 	return err
+}
+
+// realGit finds the real git binary: $AGENTSIGN_REAL_GIT (set by an outer
+// call), the config's git setting, or the first git on PATH that isn't this
+// binary (a shim symlink or copy).
+func (a *app) realGit() (string, error) {
+	self, _ := os.Executable()
+	isSelf := func(p string) bool { return self != "" && sameFile(p, self) }
+
+	if p := a.getenv(EnvRealGit); p != "" && !isSelf(p) {
+		return p, nil
+	}
+	if c, err := a.config(); err == nil && c.Git != "" {
+		if isSelf(c.Git) {
+			return "", fmt.Errorf("config git = %q points at agentsign itself", c.Git)
+		}
+		return c.Git, nil
+	}
+	name := "git"
+	if runtime.GOOS == "windows" {
+		name = "git.exe"
+	}
+	for _, dir := range filepath.SplitList(a.getenv("PATH")) {
+		if dir == "" {
+			continue
+		}
+		p := filepath.Join(dir, name)
+		fi, err := os.Stat(p)
+		if err != nil || fi.IsDir() || (runtime.GOOS != "windows" && fi.Mode()&0o111 == 0) || isSelf(p) {
+			continue
+		}
+		return p, nil
+	}
+	return "", errors.New(`real git not found on PATH (set git = "/usr/bin/git" in the agentsign config)`)
 }
 
 // gitSubcommand returns the index of git's subcommand in args (skipping

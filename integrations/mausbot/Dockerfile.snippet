@@ -4,8 +4,14 @@ RUN CGO_ENABLED=0 go install -trimpath github.com/KIFFCollective/agentsign/cmd/a
 
 # ...in the final stage:
 RUN apt-get update \
- && apt-get install -y --no-install-recommends openssh-client \
+ && apt-get install -y --no-install-recommends git openssh-client \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=agentsign /go/bin/agentsign /usr/local/bin/agentsign
+
+# Route every `git` call through agentsign: /usr/local/bin comes before
+# /usr/bin on PATH, so bots get their identity and Agent: trailer on a plain
+# `git commit`. With no OMB_BOT_ID set, it runs /usr/bin/git unchanged.
+RUN ln -s /usr/local/bin/agentsign /usr/local/bin/git
+
 COPY integrations/mausbot/config.toml /etc/agentsign/config.toml
 COPY integrations/mausbot/gitconfig /etc/gitconfig

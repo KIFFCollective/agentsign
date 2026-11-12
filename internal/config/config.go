@@ -49,6 +49,10 @@ type Config struct {
 	// SSHKeygen is the real ssh-keygen binary. Defaults to "ssh-keygen" on PATH.
 	SSHKeygen string `toml:"ssh_keygen,omitempty"`
 
+	// Git is the real git binary, used by `agentsign git` and the git shim.
+	// Defaults to the first git on PATH that isn't agentsign itself.
+	Git string `toml:"git,omitempty"`
+
 	// Path is where this config was loaded from ("" when defaults are in use).
 	Path string `toml:"-"`
 }

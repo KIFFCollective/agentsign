@@ -165,6 +165,7 @@ Agent: Pip <pip@troupe.nexus>
 ```
 
 - `agentsign git commit ...` adds it automatically.
+- In containers, link `git` to agentsign ahead of the real git on PATH (`ln -s /usr/local/bin/agentsign /usr/local/bin/git`). Then a plain `git commit` gets the agent's identity and trailer, and with no agent set git runs unchanged. See the [MausBot integration](../integrations/mausbot/README.md#every-git-goes-through-agentsign).
 - If an agent runs plain `git commit` and writes its own messages, tell it to end every message with the output of `agentsign trailer`. For example, put this in the agent's instructions: *"End every commit message with a blank line and the line printed by `agentsign trailer`."*
 
 On its own the trailer is just text, so `verify` checks it:

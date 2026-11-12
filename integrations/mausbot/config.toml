@@ -1,3 +1,5 @@
 # /etc/agentsign/config.toml for MausBot sandboxes.
 store = "/data/.openmausbot/workspaces/{agent}/.agentsign"
 env = ["OMB_BOT_ID"]
+# The real git, behind the /usr/local/bin/git -> agentsign shim.
+git = "/usr/bin/git"

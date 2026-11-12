@@ -27,7 +27,8 @@ Git integration (normally run by git, not by hand):
   credential get|store|erase   git credential helper
   sign <ssh-keygen args>       gpg.ssh.program wrapper (also: agentsign -Y sign ...)
   env [--format sh|pwsh|plain] print GIT_AUTHOR_* / GIT_COMMITTER_* for the agent
-  git <args>                   run git as the agent (commit gets an Agent: trailer)
+  git <args>                   run git as the agent (commit gets an Agent: trailer);
+                               also runs this way when invoked as "git" (symlink shim)
   trailer                      print the agent's commit trailer: Agent: Name <email>
 
 Setup and management:
@@ -70,11 +71,18 @@ func main() {
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, getwd: os.Getwd,
 	}
+	if isGitShim(os.Args[0]) {
+		os.Exit(a.finish(a.cmdGitShim(os.Args[1:])))
+	}
 	os.Exit(a.run(os.Args[1:]))
 }
 
 func (a *app) run(args []string) int {
-	err := a.dispatch(args)
+	return a.finish(a.dispatch(args))
+}
+
+// finish turns a command's error into an exit code.
+func (a *app) finish(err error) int {
 	var code exitError
 	switch {
 	case err == nil:
