@@ -1,12 +1,12 @@
 # Add to the MausBot sandbox image (Debian/Ubuntu, amd64).
 
-# git, ssh-keygen (agentsign signs with it) and the GitHub CLI.
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client gh && rm -rf /var/lib/apt/lists/*
+# git, ssh-keygen (agentsign signs with it), the GitHub CLI, and CA certificates for HTTPS.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git openssh-client gh && rm -rf /var/lib/apt/lists/*
 
 # agentsign from the GitHub release. --checksum makes the build fail if the
 # download isn't exactly this file (hash from the release's checksums.txt).
-ADD --checksum=sha256:2fec293d5b9ae937f91fdd64419de4e26b06dc6f3d1ab903bf2d5078a4d890c9 \
-    https://github.com/KIFFCollective/agentsign/releases/download/v0.1.1/agentsign_0.1.1_linux_amd64.tar.gz /tmp/agentsign.tar.gz
+ADD --checksum=sha256:ed04eedd60f65b2bb0e81320d1d8651666ae32979627544a23f93d6d5bb7fc12 \
+    https://github.com/KIFFCollective/agentsign/releases/download/v0.1.2/agentsign_0.1.2_linux_amd64.tar.gz /tmp/agentsign.tar.gz
 
 # Install it, and make `git` and `gh` run through agentsign: bots get their
 # identity, Agent: trailer and token without doing anything.
