@@ -63,13 +63,42 @@ func Resolve(c *config.Config, in Input) (*Result, error) {
 		}
 	}
 	if in.Cwd != "" {
+		realCwd := canonical(in.Cwd)
 		for _, rule := range c.PathRules {
 			if id, ok := MatchPath(rule, in.Cwd); ok {
+				return checked(id, SourcePath, rule)
+			}
+			// git runs helpers from the resolved worktree path, which can be
+			// spelled differently from the rule: symlinks (macOS /var ->
+			// /private/var) or Windows 8.3 short names (RUNNER~1). Compare
+			// real paths too.
+			if id, ok := MatchPath(canonicalRule(rule), realCwd); ok {
 				return checked(id, SourcePath, rule)
 			}
 		}
 	}
 	return nil, ErrNoAgent
+}
+
+// canonical resolves symlinks (and, on Windows, short names and case) in
+// p. Paths that don't exist are returned cleaned but otherwise unchanged.
+func canonical(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		if abs, err := filepath.Abs(r); err == nil {
+			return abs
+		}
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// canonicalRule resolves the fixed part of a rule (before {agent}).
+func canonicalRule(rule string) string {
+	before, after, ok := strings.Cut(rule, config.AgentPlaceholder)
+	if !ok || before == "" {
+		return rule
+	}
+	return filepath.ToSlash(canonical(before)) + "/" + config.AgentPlaceholder + after
 }
 
 func checked(id string, src Source, detail string) (*Result, error) {

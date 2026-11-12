@@ -2,6 +2,8 @@ package resolve
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/KIFFCollective/agentsign/internal/config"
@@ -53,6 +55,30 @@ func TestResolveRejectsBadID(t *testing.T) {
 		}
 		if _, err := Resolve(c, Input{Flag: id}); err == nil {
 			t.Errorf("id %q accepted", id)
+		}
+	}
+}
+
+// A rule written with a symlinked path must match the real path git uses.
+func TestResolvePathThroughSymlink(t *testing.T) {
+	root := t.TempDir()
+	real := filepath.Join(root, "real")
+	if err := os.MkdirAll(filepath.Join(real, "dev", "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("can't create symlinks here: %v", err)
+	}
+	cases := []struct{ rule, cwd string }{
+		{filepath.ToSlash(link) + "/{agent}/", filepath.Join(real, "dev", "repo")}, // rule via link, cwd real
+		{filepath.ToSlash(real) + "/{agent}/", filepath.Join(link, "dev", "repo")}, // rule real, cwd via link
+	}
+	for _, tc := range cases {
+		c := &config.Config{PathRules: []string{tc.rule}}
+		r, err := Resolve(c, Input{Getenv: env(nil), Cwd: tc.cwd})
+		if err != nil || r.ID != "dev" {
+			t.Errorf("rule %s, cwd %s: got %+v, %v", tc.rule, tc.cwd, r, err)
 		}
 	}
 }

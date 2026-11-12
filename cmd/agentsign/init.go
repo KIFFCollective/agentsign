@@ -98,6 +98,10 @@ func (a *app) cmdInit(args []string) error {
 			a.warnf("this looks like a 'go run' binary; pass --exe with the installed path")
 		}
 	}
+	// Real long path: no symlinks or Windows 8.3 short names (RUNNER~1).
+	if r, err := filepath.EvalSymlinks(self); err == nil {
+		self = r
+	}
 	gitPath := filepath.ToSlash(self) // git for Windows runs helpers via sh
 	var gitCmds [][]string
 	for _, h := range hosts {
@@ -107,7 +111,7 @@ func (a *app) cmdInit(args []string) error {
 			// An empty helper first resets helpers inherited from other config
 			// files, so the human's credentials are never used as a fallback.
 			[]string{"--add", key + ".helper", ""},
-			[]string{"--add", key + ".helper", shellWord(gitPath) + " credential"},
+			[]string{"--add", key + ".helper", helperCommand(gitPath)},
 			[]string{key + ".useHttpPath", "true"},
 		)
 	}
@@ -246,6 +250,17 @@ func writeConfig(path, body string, force bool) error {
 }
 
 // shellWord quotes a path for git's shell-run credential helper string.
+// helperCommand builds the credential.helper value. git runs a helper
+// verbatim only if the string starts with an absolute path; anything else
+// that doesn't start with "!" becomes "git credential-<value>". A quoted path
+// starts with a quote, so it must use the "!" (shell command) form.
+func helperCommand(path string) string {
+	if w := shellWord(path); w != path {
+		return "!" + w + " credential"
+	}
+	return path + " credential"
+}
+
 func shellWord(s string) string {
 	if !strings.ContainsAny(s, " \t'\"\\$`!&;|<>()*?[]#~") {
 		return s
