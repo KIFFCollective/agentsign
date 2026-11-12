@@ -1,0 +1,47 @@
+name: Release
+
+# Push a tag like v0.1.0 to build, sign and publish binaries.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # create the GitHub release
+      id-token: write     # Sigstore keyless signing and attestations
+      attestations: write # SLSA build provenance
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0  # changelog needs history
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: SLSA build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-checksums: ./dist/checksums.txt

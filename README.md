@@ -12,10 +12,17 @@ See [docs/SPEC.md](docs/SPEC.md) for the design and [docs/security.md](docs/secu
 
 > **Status:** early development (phase 1, MVP). Not yet released.
 
-## Quickstart
+## Install
+
+Download a binary for your platform from [Releases](https://github.com/KIFFCollective/agentsign/releases). Each release has a checksum file signed with Sigstore and build provenance attached; see [docs/releasing.md](docs/releasing.md#verifying-a-download) for how to verify a download. Or build from source:
 
 ```sh
 go install github.com/KIFFCollective/agentsign/cmd/agentsign@latest
+```
+
+## Quickstart
+
+```sh
 
 # Once per host: config, agent store and the shared git config.
 # --global takes over all git on this account: agent hosts only. On your own

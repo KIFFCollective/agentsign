@@ -2,6 +2,10 @@ version: 2
 
 project_name: agentsign
 
+before:
+  hooks:
+    - go mod verify
+
 builds:
   - main: ./cmd/agentsign
     env:
@@ -9,7 +13,8 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -buildid= -X main.version={{ .Version }}
+    # Reproducible: timestamps come from the commit, not the build machine.
     mod_timestamp: "{{ .CommitTimestamp }}"
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
@@ -19,11 +24,46 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - docs/quickstart.md
+      - docs/security.md
 
 checksum:
   name_template: checksums.txt
+  algorithm: sha256
 
-# Signed checksums and SLSA provenance are added by the release workflow (phase 1).
+# Keyless signature over checksums.txt (Sigstore, using the workflow's OIDC
+# identity). Verify with:
+#   cosign verify-blob --bundle checksums.txt.sigstore.json \
+#     --certificate-identity-regexp '^https://github.com/KIFFCollective/agentsign/\.github/workflows/release\.yml@refs/tags/v' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "--yes", "${artifact}"]
+
+release:
+  draft: false
+  prerelease: auto
+  footer: |
+    ### Verify
+
+    ```sh
+    sha256sum --ignore-missing -c checksums.txt
+    cosign verify-blob --bundle checksums.txt.sigstore.json \
+      --certificate-identity-regexp '^https://github.com/KIFFCollective/agentsign/\.github/workflows/release\.yml@refs/tags/v' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+    gh attestation verify agentsign_{{ .Version }}_linux_amd64.tar.gz -R KIFFCollective/agentsign
+    ```
 
 changelog:
   use: github
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
