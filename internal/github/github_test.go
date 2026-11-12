@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -34,6 +35,32 @@ func TestCommitVerification(t *testing.T) {
 	_, err = c.CommitVerification(context.Background(), "acme/other", sha)
 	if err == nil || !strings.Contains(err.Error(), "404: No commit found") {
 		t.Fatalf("want 404 error, got %v", err)
+	}
+}
+
+func TestCreateStatus(t *testing.T) {
+	var got map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/repos/acme/app/statuses/"+sha {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c := &Client{BaseURL: srv.URL}
+	long := strings.Repeat("é", 200)
+	if err := c.CreateStatus(context.Background(), "acme/app", sha, Status{State: "success", Context: "agentsign/signer", Description: long}); err != nil {
+		t.Fatal(err)
+	}
+	if got["state"] != "success" || got["context"] != "agentsign/signer" {
+		t.Fatalf("payload %v", got)
+	}
+	if n := len([]rune(got["description"])); n != MaxStatusDescription {
+		t.Fatalf("description has %d runes, want %d", n, MaxStatusDescription)
 	}
 }
 

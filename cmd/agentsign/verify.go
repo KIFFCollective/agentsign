@@ -19,6 +19,9 @@ func (a *app) cmdVerify(args []string) error {
 	authorMatch := fs.Bool("require-author-match", false, "agent commits must have author == committer")
 	format := fs.String("format", "text", "output: text, markdown or json")
 	summary := fs.String("summary", "", "also append a markdown report to FILE (e.g. $GITHUB_STEP_SUMMARY)")
+	requireTrailer := fs.Bool("require-trailer", false, "agent commits must end with an 'Agent: Name <email>' trailer")
+	postStatuses := fs.Bool("post-statuses", false, "post a commit status per commit naming its agent (needs $GITHUB_TOKEN with statuses:write)")
+	statusContext := fs.String("status-context", "agentsign/signer", "context name for --post-statuses")
 	var domains multiFlag
 	fs.Var(&domains, "agent-domain", "email domain reserved for agents; unknown committers there fail (repeatable)")
 	pos, err := parseInterleaved(fs, args)
@@ -40,7 +43,11 @@ func (a *app) cmdVerify(args []string) error {
 		Humans:             verify.HumanPolicy(*humans),
 		AgentDomains:       domains,
 		RequireAuthorMatch: *authorMatch,
+		RequireTrailer:     *requireTrailer,
 		SSHKeygen:          c.SSHKeygen,
+	}
+	if *postStatuses && *ghRepo == "" && a.getenv("GITHUB_REPOSITORY") == "" {
+		return errors.New("--post-statuses needs --github-repo owner/name (or $GITHUB_REPOSITORY)")
 	}
 	if opts.Humans == verify.HumansGitHubVerified {
 		check, err := a.githubHumanCheck(*ghRepo)
@@ -83,10 +90,55 @@ func (a *app) cmdVerify(args []string) error {
 			return werr
 		}
 	}
+	if *postStatuses {
+		a.postStatuses(rep, opts.Humans, *ghRepo, *statusContext)
+	}
 	if !rep.OK() {
 		return exitError(1)
 	}
 	return nil
+}
+
+// postStatuses sets a commit status on each commit so GitHub shows which
+// agent made it. Failures are warnings: a read-only token (e.g. a PR from a
+// fork) must not turn a passing verification into a failing one.
+func (a *app) postStatuses(rep *verify.Report, humans verify.HumanPolicy, repo, statusCtx string) {
+	if repo == "" {
+		repo = a.getenv("GITHUB_REPOSITORY")
+	}
+	client := github.NewFromEnv(a.getenv)
+	target := ""
+	if srv, run := a.getenv("GITHUB_SERVER_URL"), a.getenv("GITHUB_RUN_ID"); srv != "" && run != "" {
+		target = fmt.Sprintf("%s/%s/actions/runs/%s", srv, repo, run)
+	}
+	posted := 0
+	for _, res := range rep.Results {
+		st := statusFor(res, humans)
+		st.Context, st.TargetURL = statusCtx, target
+		if err := client.CreateStatus(context.Background(), repo, res.Commit, st); err != nil {
+			a.warnf("could not post status for %.12s: %v", res.Commit, err)
+			continue
+		}
+		posted++
+	}
+	fmt.Fprintf(a.stderr, "Posted %d of %d commit statuses (%s)\n", posted, len(rep.Results), statusCtx)
+}
+
+// statusFor describes a result as a commit status.
+func statusFor(res verify.Result, humans verify.HumanPolicy) github.Status {
+	switch res.Status {
+	case verify.StatusOK:
+		return github.Status{State: "success",
+			Description: fmt.Sprintf("Signed by %s <%s> · key %s", res.CommitterName, res.Agent, res.Fingerprint)}
+	case verify.StatusHuman:
+		d := "Not an agent commit"
+		if humans == verify.HumansGitHubVerified {
+			d += " · Verified on GitHub"
+		}
+		return github.Status{State: "success", Description: d}
+	default:
+		return github.Status{State: "failure", Description: res.Reason}
+	}
 }
 
 // githubHumanCheck asks the GitHub API whether a commit is Verified.

@@ -20,6 +20,7 @@ agentsign closes this gap in two places:
 | Human commits pass unchecked | `--humans github-verified` accepts only commits GitHub marks Verified, and fails closed when the API can't be reached. |
 | A commit uses a made-up agent email | `--agent-domain` fails any committer on the agent domain that isn't registered. |
 | A revoked agent's email is reused | Revoked agents stay in `allowed_signers` as `# agentsign-revoked:` markers and always fail. |
+| A forged `Agent:` trailer | `verify` requires the trailer to match the signing agent, and fails trailers on commits no agent signed. |
 | Forged author text | Only matters if CI is bypassed, so make the check required. |
 | Bot PRs are merged into main | Require human review on main. |
 | Secrets appear on the command line or in logs | Tokens are read only from stdin or files. No credential is printed except in `credential get` output to git. |

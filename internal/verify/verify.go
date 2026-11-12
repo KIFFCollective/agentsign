@@ -47,6 +47,8 @@ type Options struct {
 	AgentDomains []string
 	// RequireAuthorMatch: agent commits must have author == committer.
 	RequireAuthorMatch bool
+	// RequireTrailer: agent commits must carry an Agent: trailer.
+	RequireTrailer bool
 	// HumanCheck is used by the github-verified policy.
 	HumanCheck HumanCheck
 	Git        string // git binary, default "git"
@@ -62,16 +64,32 @@ const (
 	StatusHuman Status = "human"
 )
 
+// TrailerKey is the commit message trailer naming the agent:
+//
+//	Agent: Pip <pip@troupe.nexus>
+//
+// It makes commits self-describing on GitHub, where every agent on a shared
+// machine account shows as that account. verify checks it against the
+// signing key, so it can't claim someone else.
+const TrailerKey = "Agent"
+
+// Trailer formats the Agent trailer line for an agent.
+func Trailer(name, email string) string {
+	return fmt.Sprintf("%s: %s <%s>", TrailerKey, name, email)
+}
+
 // Result is the outcome for one commit.
 type Result struct {
-	Commit      string `json:"commit"`
-	Subject     string `json:"subject"`
-	Committer   string `json:"committer"`
-	Author      string `json:"author"`
-	Agent       string `json:"agent,omitempty"` // principal found for the signing key
-	Fingerprint string `json:"fingerprint,omitempty"`
-	Status      Status `json:"status"`
-	Reason      string `json:"reason,omitempty"`
+	Commit        string   `json:"commit"`
+	Subject       string   `json:"subject"`
+	Committer     string   `json:"committer"`
+	CommitterName string   `json:"committer_name"`
+	Author        string   `json:"author"`
+	AgentTrailers []string `json:"agent_trailers,omitempty"` // values of Agent: trailers
+	Agent         string   `json:"agent,omitempty"`          // principal found for the signing key
+	Fingerprint   string   `json:"fingerprint,omitempty"`
+	Status        Status   `json:"status"`
+	Reason        string   `json:"reason,omitempty"`
 }
 
 // Report is the outcome for a range.
@@ -131,12 +149,15 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 }
 
 type commitInfo struct {
-	sha, authorEmail, committerEmail, subject string
+	sha, authorEmail, committerEmail, committerName, subject string
+	trailers                                                 []string
 }
 
 func listCommits(ctx context.Context, opts Options) ([]commitInfo, error) {
-	// %x1f separates fields; subjects can't contain it.
-	out, err := git(ctx, opts, "log", "--no-show-signature", "--format=%H%x1f%ae%x1f%ce%x1f%s", opts.Range, "--")
+	// %x1f separates fields and %x1e separates trailer values; neither can
+	// appear in a subject or a trailer. The subject goes last.
+	format := "--format=%H%x1f%ae%x1f%ce%x1f%cn%x1f%(trailers:key=" + TrailerKey + ",valueonly,unfold,separator=%x1e)%x1f%s"
+	out, err := git(ctx, opts, "log", "--no-show-signature", format, opts.Range, "--")
 	if err != nil {
 		return nil, err
 	}
@@ -145,24 +166,45 @@ func listCommits(ctx context.Context, opts Options) ([]commitInfo, error) {
 		if line == "" {
 			continue
 		}
-		f := strings.SplitN(line, "\x1f", 4)
-		if len(f) != 4 {
+		f := strings.SplitN(line, "\x1f", 6)
+		if len(f) != 6 {
 			return nil, fmt.Errorf("unexpected git log line %q", line)
 		}
-		commits = append(commits, commitInfo{f[0], f[1], f[2], f[3]})
+		c := commitInfo{sha: f[0], authorEmail: f[1], committerEmail: f[2], committerName: f[3], subject: f[5]}
+		for _, t := range strings.Split(f[4], "\x1e") {
+			if t = strings.TrimSpace(t); t != "" {
+				c.trailers = append(c.trailers, t)
+			}
+		}
+		commits = append(commits, c)
 	}
 	return commits, nil
+}
+
+// parseIdent splits "Name <email>".
+func parseIdent(s string) (name, email string, ok bool) {
+	lt, gt := strings.IndexByte(s, '<'), strings.LastIndexByte(s, '>')
+	if lt < 0 || gt < lt || strings.TrimSpace(s[gt+1:]) != "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(s[:lt]), strings.TrimSpace(s[lt+1 : gt]), true
 }
 
 var goodSig = regexp.MustCompile(`Good "git" signature for (\S+) with (\S+) key (SHA256:\S+)`)
 
 func checkCommit(ctx context.Context, opts Options, signersPath string, sf *signers.File, agents map[string]bool, c commitInfo) Result {
-	res := Result{Commit: c.sha, Subject: c.subject, Committer: c.committerEmail, Author: c.authorEmail}
+	res := Result{Commit: c.sha, Subject: c.subject, Committer: c.committerEmail, CommitterName: c.committerName,
+		Author: c.authorEmail, AgentTrailers: c.trailers}
 	committer := strings.ToLower(c.committerEmail)
 
 	if !agents[committer] {
 		if d := domainOf(committer); d != "" && containsFold(opts.AgentDomains, d) {
 			return fail(res, fmt.Sprintf("committer %s is on agent domain %s but is not a registered agent", c.committerEmail, d))
+		}
+		if len(c.trailers) > 0 {
+			// An Agent: line is a claim of agent authorship; only a
+			// signature from that agent can back it.
+			return fail(res, fmt.Sprintf("%s: %s trailer on a commit not signed by a registered agent", TrailerKey, c.trailers[0]))
 		}
 		switch opts.Humans {
 		case HumansDeny:
@@ -199,6 +241,19 @@ func checkCommit(ctx context.Context, opts Options, signersPath string, sf *sign
 	res.Agent, res.Fingerprint = m[1], m[3]
 	if !strings.EqualFold(res.Agent, c.committerEmail) {
 		return fail(res, fmt.Sprintf("signed with %s's key but committer is %s", res.Agent, c.committerEmail))
+	}
+	want := Trailer(c.committerName, res.Agent)
+	for _, t := range c.trailers {
+		name, email, ok := parseIdent(t)
+		if !ok {
+			return fail(res, fmt.Sprintf("malformed %s trailer %q (want %q)", TrailerKey, t, want))
+		}
+		if !strings.EqualFold(email, res.Agent) || name != c.committerName {
+			return fail(res, fmt.Sprintf("%s trailer says %q but the commit is signed by %s <%s>", TrailerKey, t, c.committerName, res.Agent))
+		}
+	}
+	if opts.RequireTrailer && len(c.trailers) == 0 {
+		return fail(res, fmt.Sprintf("missing %s trailer (want %q)", TrailerKey, want))
 	}
 	res.Status = StatusOK
 	return res

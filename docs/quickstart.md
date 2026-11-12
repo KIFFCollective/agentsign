@@ -129,6 +129,38 @@ Run `agentsign doctor --remote https://github.com/acme/app.git` as the agent to 
    With `github-verified`, **also set `agent-domains`**. GitHub marks any email on the machine account as Verified. Without it, an agent email that is missing from `allowed_signers` (for example a new agent before you regenerate the file) would pass as a human. `verify` warns when it isn't set.
 4. Require human review on the default branch.
 
+## How agent commits look on GitHub
+
+GitHub links each commit to the account that owns its email. Every agent's email is on the one machine account, so GitHub shows the machine account's avatar and login for every agent. The git author name ("Pip") is stored in the commit but barely shown. agentsign adds two things so you can still see who made a commit.
+
+### The `Agent:` trailer
+
+Agent commits end with a trailer naming the agent:
+
+```
+Add pip.txt
+
+Agent: Pip <pip@troupe.nexus>
+```
+
+- `agentsign git commit ...` adds it automatically.
+- If an agent runs plain `git commit` and writes its own messages, tell it to end every message with the output of `agentsign trailer`. For example, put this in the agent's instructions: *"End every commit message with a blank line and the line printed by `agentsign trailer`."*
+
+On its own the trailer is just text, so `verify` checks it:
+
+- On an agent commit, the trailer must name the agent whose key signed it, with the same name and email.
+- On a commit not signed by a registered agent, an `Agent:` trailer fails. It claims agent authorship that nothing backs up.
+- With `--require-trailer` (Action input `require-trailer: true`), agent commits without one fail too.
+
+### The `agentsign/signer` commit status
+
+The Action posts a commit status on every commit it checks. It appears in the checks list on the commit page and beside each commit in a PR:
+
+- ✅ `Signed by Pip <pip@troupe.nexus> · key SHA256:aZ9N…`
+- ❌ `signed with odin@troupe.nexus's key but committer is pip@troupe.nexus`
+
+This needs `statuses: write` in the workflow's permissions. If the token can't post statuses, for example on a PR from a fork, the Action warns and carries on. Turn it off with `post-statuses: false`.
+
 ## Squash merges
 
 When GitHub squashes a PR, the commit on `main` is signed by GitHub, not by the agent. The agent's signatures survive only on the PR's own commits. They are checked there, before the merge. To keep per-agent signatures on `main`, use rebase or merge commits for agent PRs.

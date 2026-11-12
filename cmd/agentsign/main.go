@@ -27,7 +27,8 @@ Git integration (normally run by git, not by hand):
   credential get|store|erase   git credential helper
   sign <ssh-keygen args>       gpg.ssh.program wrapper (also: agentsign -Y sign ...)
   env [--format sh|pwsh|plain] print GIT_AUTHOR_* / GIT_COMMITTER_* for the agent
-  git <args>                   run git as the agent
+  git <args>                   run git as the agent (commit gets an Agent: trailer)
+  trailer                      print the agent's commit trailer: Agent: Name <email>
 
 Setup and management:
   init                         create the config, agent store and shared git config
@@ -126,6 +127,8 @@ func (a *app) dispatch(args []string) error {
 		return a.cmdEnv(rest)
 	case "git":
 		return a.cmdGit(rest)
+	case "trailer":
+		return a.cmdTrailer(rest)
 	case "init":
 		return a.cmdInit(rest)
 	case "agent":

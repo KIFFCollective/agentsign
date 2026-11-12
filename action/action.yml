@@ -25,6 +25,14 @@ inputs:
   require-author-match:
     description: Require author == committer for agent commits.
     default: "false"
+  require-trailer:
+    description: Require agent commits to end with an "Agent: Name <email>" trailer.
+    default: "false"
+  post-statuses:
+    description: >
+      Post an "agentsign/signer" commit status on each commit naming the agent that
+      signed it, so GitHub shows who made it. Needs statuses:write in the workflow.
+    default: "true"
 
 runs:
   using: composite
@@ -45,6 +53,8 @@ runs:
         INPUT_HUMANS: ${{ inputs.humans }}
         INPUT_DOMAINS: ${{ inputs.agent-domains }}
         INPUT_AUTHOR_MATCH: ${{ inputs.require-author-match }}
+        INPUT_REQUIRE_TRAILER: ${{ inputs.require-trailer }}
+        INPUT_POST_STATUSES: ${{ inputs.post-statuses }}
         GITHUB_TOKEN: ${{ inputs.token }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -61,4 +71,6 @@ runs:
         args=(verify --signers "$INPUT_SIGNERS" --humans "$INPUT_HUMANS" --summary "$GITHUB_STEP_SUMMARY")
         for d in $INPUT_DOMAINS; do args+=(--agent-domain "$d"); done
         if [ "$INPUT_AUTHOR_MATCH" = "true" ]; then args+=(--require-author-match); fi
+        if [ "$INPUT_REQUIRE_TRAILER" = "true" ]; then args+=(--require-trailer); fi
+        if [ "$INPUT_POST_STATUSES" = "true" ]; then args+=(--post-statuses); fi
         "$RUNNER_TEMP/agentsign" "${args[@]}" "$range"

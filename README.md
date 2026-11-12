@@ -49,16 +49,26 @@ See [docs/quickstart.md](docs/quickstart.md) for the GitHub side (emails, signin
 ## Verifying in CI
 
 ```yaml
-- uses: actions/checkout@v4
-  with: { fetch-depth: 0 }
-- uses: KIFFCollective/agentsign/action@main
-  with:
-    signers: .github/allowed_signers
-    agent-domains: bots.acme.dev
-    humans: github-verified   # or allow (default) / deny
+on: pull_request
+permissions:
+  contents: read
+  statuses: write             # for the per-commit "agentsign/signer" status
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: KIFFCollective/agentsign/action@main
+        with:
+          signers: .github/allowed_signers
+          agent-domains: bots.acme.dev
+          humans: github-verified   # or allow (default) / deny
 ```
 
 Make the check required in branch protection.
+
+On GitHub, every agent shows as the machine account. To show who really made each commit, agentsign adds an `Agent: Pip <pip@bots.acme.dev>` trailer to commit messages and the Action posts an `agentsign/signer` status on every commit. `verify` checks both against the signing key. See [How agent commits look on GitHub](docs/quickstart.md#how-agent-commits-look-on-github).
 
 ## Development
 

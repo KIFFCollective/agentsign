@@ -12,6 +12,7 @@ import (
 	"github.com/KIFFCollective/agentsign/internal/resolve"
 	"github.com/KIFFCollective/agentsign/internal/sign"
 	"github.com/KIFFCollective/agentsign/internal/store"
+	"github.com/KIFFCollective/agentsign/internal/verify"
 )
 
 // cmdCredential is the git credential helper. It must never break other
@@ -185,6 +186,8 @@ func (a *app) cmdGit(args []string) error {
 	if self, err := os.Executable(); err == nil && sameFile(self, gitBin) {
 		return errors.New("the git on PATH is agentsign itself; refusing to recurse")
 	}
+	ident := identityEnv(ag)
+	args = injectTrailer(args, verify.Trailer(ident[0][1], ag.Email))
 	cmd := exec.Command(gitBin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = a.stdin, a.stdout, a.stderr
 	cmd.Env = os.Environ()
@@ -200,6 +203,49 @@ func (a *app) cmdGit(args []string) error {
 		return exitError(ee.ExitCode())
 	}
 	return err
+}
+
+// gitSubcommand returns the index of git's subcommand in args (skipping
+// global options such as -C dir and -c key=value), or -1.
+func gitSubcommand(args []string) int {
+	for i := 0; i < len(args); i++ {
+		switch a := args[i]; {
+		case a == "-C" || a == "-c" || a == "--git-dir" || a == "--work-tree" || a == "--namespace" || a == "--config-env":
+			i++ // option takes the next argument
+		case strings.HasPrefix(a, "-"):
+		default:
+			return i
+		}
+	}
+	return -1
+}
+
+// injectTrailer adds --trailer to a git commit invocation. git's default
+// trailer.ifExists (addIfDifferentNeighbor) keeps it from being duplicated
+// on --amend.
+func injectTrailer(args []string, trailer string) []string {
+	i := gitSubcommand(args)
+	if i < 0 || args[i] != "commit" {
+		return args
+	}
+	out := append([]string{}, args[:i+1]...)
+	out = append(out, "--trailer", trailer)
+	return append(out, args[i+1:]...)
+}
+
+// cmdTrailer prints the agent's commit trailer, for agents that write their
+// own commit messages.
+func (a *app) cmdTrailer(args []string) error {
+	fs := a.newFlags("trailer", "trailer")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	_, ag, err := a.currentAgent()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(a.stdout, verify.Trailer(identityEnv(ag)[0][1], ag.Email))
+	return nil
 }
 
 func shQuote(s string) string {

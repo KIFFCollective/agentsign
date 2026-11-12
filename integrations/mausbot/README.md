@@ -27,3 +27,9 @@ Turn off Claude Code's own commit attribution so the agent identity is the only 
 ```json
 {"attribution": {"commit": "", "pr": "", "sessionUrl": false}}
 ```
+
+Then add this to each bot's instructions, so its commits name it on GitHub:
+
+> End every commit message with a blank line and the line printed by `agentsign trailer`.
+
+The `agentsign/signer` status from the verify Action shows the agent even when a bot forgets.

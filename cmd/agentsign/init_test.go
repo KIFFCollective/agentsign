@@ -1,6 +1,28 @@
 package main
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestInjectTrailer(t *testing.T) {
+	const tr = "Agent: Pip <pip@x>"
+	cases := map[string]string{
+		"commit -m hi":                      "commit --trailer " + tr + " -m hi",
+		"-C repo -c a=b commit --amend":     "-C repo -c a=b commit --trailer " + tr + " --amend",
+		"--no-pager commit":                 "--no-pager commit --trailer " + tr,
+		"push origin main":                  "push origin main",
+		"-c commit.gpgSign=true log commit": "-c commit.gpgSign=true log commit",
+	}
+	for in, want := range cases {
+		got := injectTrailer(strings.Fields(in), tr)
+		// The trailer is one argument; compare after re-splitting it.
+		if !reflect.DeepEqual(strings.Fields(strings.Join(got, " ")), strings.Fields(want)) {
+			t.Errorf("injectTrailer(%q) = %q want %q", in, got, want)
+		}
+	}
+}
 
 func TestHelperCommand(t *testing.T) {
 	cases := map[string]string{
