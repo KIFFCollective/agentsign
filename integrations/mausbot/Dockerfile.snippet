@@ -1,17 +1,17 @@
-# Add to the MausBot sandbox image.
-FROM golang:1.26 AS agentsign
-RUN CGO_ENABLED=0 go install -trimpath github.com/KIFFCollective/agentsign/cmd/agentsign@latest
+# Add to the MausBot sandbox image (Debian/Ubuntu, amd64).
 
-# ...in the final stage:
-RUN apt-get update \
- && apt-get install -y --no-install-recommends git openssh-client \
- && rm -rf /var/lib/apt/lists/*
-COPY --from=agentsign /go/bin/agentsign /usr/local/bin/agentsign
+# git and ssh-keygen (agentsign signs with it).
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client && rm -rf /var/lib/apt/lists/*
 
-# Route every `git` call through agentsign: /usr/local/bin comes before
-# /usr/bin on PATH, so bots get their identity and Agent: trailer on a plain
-# `git commit`. With no OMB_BOT_ID set, it runs /usr/bin/git unchanged.
-RUN ln -s /usr/local/bin/agentsign /usr/local/bin/git
+# agentsign from the GitHub release. --checksum makes the build fail if the
+# download isn't exactly this file (hash from the release's checksums.txt).
+ADD --checksum=sha256:8129164640075d58728cdf89224a03b94f342562a27482c3b605af43e39eab8c \
+    https://github.com/KIFFCollective/agentsign/releases/download/v0.1.0/agentsign_0.1.0_linux_amd64.tar.gz /tmp/agentsign.tar.gz
+
+# Install it, and make `git` run through agentsign so bots get their
+# identity and Agent: trailer on a plain `git commit`.
+RUN tar -xzf /tmp/agentsign.tar.gz -C /usr/local/bin agentsign && rm /tmp/agentsign.tar.gz \
+ && ln -s agentsign /usr/local/bin/git
 
 COPY integrations/mausbot/config.toml /etc/agentsign/config.toml
 COPY integrations/mausbot/gitconfig /etc/gitconfig
