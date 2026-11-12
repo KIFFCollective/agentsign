@@ -29,6 +29,8 @@ Git integration (normally run by git, not by hand):
   env [--format sh|pwsh|plain] print GIT_AUTHOR_* / GIT_COMMITTER_* for the agent
   git <args>                   run git as the agent (commit gets an Agent: trailer);
                                also runs this way when invoked as "git" (symlink shim)
+  (as "gh")                    when invoked as "gh", runs the GitHub CLI with the
+                               agent's token in GH_TOKEN (never stored on disk)
   trailer                      print the agent's commit trailer: Agent: Name <email>
 
 Setup and management:
@@ -74,6 +76,9 @@ func main() {
 	if isGitShim(os.Args[0]) {
 		os.Exit(a.finish(a.cmdGitShim(os.Args[1:])))
 	}
+	if isGHShim(os.Args[0]) {
+		os.Exit(a.finish(a.cmdGHShim(os.Args[1:])))
+	}
 	os.Exit(a.run(os.Args[1:]))
 }
 
@@ -91,6 +96,9 @@ func (a *app) finish(err error) int {
 		return int(code)
 	case errors.Is(err, flag.ErrHelp):
 		return 0
+	case errors.Is(err, resolve.ErrNoAgent):
+		fmt.Fprintf(a.stderr, "agentsign: %v; %s\n", err, doctorHint)
+		return 1
 	default:
 		fmt.Fprintf(a.stderr, "agentsign: %v\n", err)
 		return 1

@@ -1,33 +1,43 @@
 # MausBot integration
 
-This is the reference integration. Each MausBot bot runs as an agent, identified by `OMB_BOT_ID`. MausBot sets that variable at `server/agents-turn.ts:40`, and the sandbox passes it through.
+This is the reference integration. Each MausBot bot is an agent. Bots need nothing beyond `git` and `gh`: the image routes both through agentsign, which works out which bot is calling from the folder it runs in.
+
+## How a bot is identified
+
+MausBot runs each conversation in `/data/.openmausbot/task-workspaces/<bot-id>/<thread-id>/`. The sandbox binds that folder, and the bot's home `/data/.openmausbot/workspaces/<bot-id>/`, at the same paths, and each bot sees only its own. [config.toml](config.toml) has a path rule for each, so any git or gh call inside them is that bot's. A bot can't claim another bot's identity, because it can't see the other bot's folders.
+
+`OMB_BOT_ID` is **not** used. MausBot sets it only for its own agents MCP helper process, not for the engine's shell, so agentsign never sees it.
+
+Limits:
+- **A bot working outside its folders isn't identified.** For example, a bot whose *Working Folder* setting points elsewhere, or that clones into `/tmp`. Its commits are refused with "no agent identified … run `agentsign doctor`". That's the right failure: nothing is signed or pushed under the wrong name. Keep Working Folder empty, or add a path rule for it.
+- **Fix upstream:** MausBot could pass `OMB_BOT_ID` into the engine's environment (`server/drivers/claude.ts`, where that env is built; the sandbox's allow-list already lets it through). agentsign would then use it with `env = ["OMB_BOT_ID"]`, alongside the path rules.
 
 ## Image
 
-Add the agentsign binary and `openssh-client` (the current image has no `ssh-keygen`), and link `git` to agentsign. See [Dockerfile.snippet](Dockerfile.snippet).
+See [Dockerfile.snippet](Dockerfile.snippet). It installs git, `openssh-client` (for `ssh-keygen`) and `gh`, installs agentsign from the release, and links `/usr/local/bin/git` and `/usr/local/bin/gh` to it. `/usr/local/bin` comes before `/usr/bin` on PATH. The real binaries are pinned in [config.toml](config.toml) (`git = "/usr/bin/git"`, `gh = "/usr/bin/gh"`).
 
-### Every `git` goes through agentsign
+### git
 
-The image puts a symlink `/usr/local/bin/git → agentsign` ahead of `/usr/bin/git` on PATH. When agentsign runs under the name `git`:
+Inside a bot's folders, `git` runs with the bot's identity, and `git commit` adds `Agent: <Name> <email>`. Signing and push credentials come from the shared [gitconfig](gitconfig).
 
-- **With `OMB_BOT_ID` set,** it runs the real git with the bot's identity (`GIT_AUTHOR_*`, `GIT_COMMITTER_*`). On `git commit` it also adds the bot's trailer, e.g. `Agent: Pip <pip@troupe.nexus>`. Bots just run `git commit`, with no wrapper and no prompt instructions to forget.
-- **With no bot identified** (an operator shell, image build steps), it runs `/usr/bin/git` unchanged.
+Elsewhere, git runs unchanged. It also runs unchanged when the caller sets its own `GIT_AUTHOR_*` or `GIT_COMMITTER_*`, as MausBot's checkpoint commits do.
 
-The real git is pinned with `git = "/usr/bin/git"` in [config.toml](config.toml). Nested git calls (hooks, submodules) go straight to it.
+### gh
+
+Inside a bot's folders, `gh` runs with the bot's own token in `GH_TOKEN`, for that one call. The token is never written to disk, and it replaces any `GH_TOKEN`/`GITHUB_TOKEN` in the environment. `gh auth login`, `logout`, `refresh`, `setup-git` and `switch` are refused for bots.
+
+This matters because the bots share a home. A token stored by `gh auth login` (`~/.config/gh/hosts.yml`) is readable by every bot, and gh would use it with no repo limit. `agentsign doctor` warns if it finds one, or a token in the environment.
 
 Limits:
-- **Absolute paths bypass the shim.** A tool that calls `/usr/bin/git` directly skips it. Signing and credentials still go through agentsign via the shared gitconfig; only the identity variables and trailer are missed.
-- **Only `git commit` gets the trailer.** Commits made by `git merge`, `cherry-pick`, `revert` and `rebase` don't. `verify` still checks their signatures, and the `agentsign/signer` status still names the bot.
+- **Absolute paths bypass the shims.** A tool calling `/usr/bin/git` or `/usr/bin/gh` directly skips them. For git, signing and credentials still go through agentsign; only the identity and trailer are missed.
+- **Only `git commit` gets the trailer.** Merges, cherry-picks, reverts and rebases don't. `verify` still checks their signatures, and the `agentsign/signer` status still names the bot.
 
 ## Config
 
-- Put [config.toml](config.toml) at `/etc/agentsign/config.toml`. Each bot's store is inside its own workspace, which other bots can't see: `/data/.openmausbot/workspaces/<bot-id>/.agentsign/`.
-- Put the shared git config ([gitconfig](gitconfig)) in the sandbox's shared home, or generate it with:
+- [config.toml](config.toml) → `/etc/agentsign/config.toml`
+- [gitconfig](gitconfig) → `/etc/gitconfig`. Make sure no `~/.gitconfig` in the shared home sets `user.name`, `user.email` or a credential helper.
 
-  ```sh
-  agentsign init --system --exe /usr/local/bin/agentsign \
-    --store '/data/.openmausbot/workspaces/{agent}/.agentsign' --env OMB_BOT_ID
-  ```
+Run `agentsign agent add` and `agentsign signers` as an operator with **all of `/data` mounted**, not from inside a bot's sandbox, which only sees its own home. Run `agentsign doctor` from inside a bot's folder to check that bot.
 
 ## Network
 
@@ -41,4 +51,4 @@ Turn off Claude Code's own commit attribution so the agent identity is the only 
 {"attribution": {"commit": "", "pr": "", "sessionUrl": false}}
 ```
 
-With the git shim, bots need no commit instructions: the trailer is added for them. (Without the shim, tell each bot to end every commit message with a blank line and the line printed by `agentsign trailer`.) To make the trailer mandatory, set `require-trailer: true` on the verify Action.
+Bots need no git or gh instructions.

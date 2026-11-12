@@ -20,6 +20,8 @@ agentsign closes this gap in two places:
 | Human commits pass unchecked | `--humans github-verified` accepts only commits GitHub marks Verified, and fails closed when the API can't be reached. |
 | A commit uses a made-up agent email | `--agent-domain` fails any committer on the agent domain that isn't registered. |
 | A revoked agent's email is reused | Revoked agents stay in `allowed_signers` as `# agentsign-revoked:` markers and always fail. |
+| An agent stores its token where others can read it (`gh auth login` into a shared home) | The `gh` shim passes the token in `GH_TOKEN` for each call and refuses `gh auth login`/`setup-git` for agents. `doctor` warns about stored gh tokens and tokens in the environment. |
+| An agent is identified by the wrong rule | Path rules match only folders the agent's sandbox exposes. If agents can't see each other's folders, they can't claim each other. Outside those folders no agent is identified, and signing and pushes are refused. |
 | A forged `Agent:` trailer | `verify` requires the trailer to match the signing agent, and fails trailers on commits no agent signed. |
 | Forged author text | Only matters if CI is bypassed, so make the check required. |
 | Bot PRs are merged into main | Require human review on main. |

@@ -53,6 +53,10 @@ type Config struct {
 	// Defaults to the first git on PATH that isn't agentsign itself.
 	Git string `toml:"git,omitempty"`
 
+	// GH is the real GitHub CLI, used by the gh shim. Defaults to the first
+	// gh on PATH that isn't agentsign itself.
+	GH string `toml:"gh,omitempty"`
+
 	// Path is where this config was loaded from ("" when defaults are in use).
 	Path string `toml:"-"`
 }

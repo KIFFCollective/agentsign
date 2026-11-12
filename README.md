@@ -37,7 +37,7 @@ agentsign agent token dev --expires 2027-01-31 < token.txt
 agentsign signers --out .github/allowed_signers
 ```
 
-Then, as the agent:
+Then, as the agent (on hosts with the [git and gh shims](docs/quickstart.md#shims-plain-git-and-gh), plain `git` and `gh` do all of this and nothing else is needed):
 
 ```sh
 export AGENTSIGN_AGENT=dev

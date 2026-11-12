@@ -1,5 +1,18 @@
 # /etc/agentsign/config.toml for MausBot sandboxes.
+
+# Each bot's key and token live in its home, which only that bot can see.
 store = "/data/.openmausbot/workspaces/{agent}/.agentsign"
-env = ["OMB_BOT_ID"]
-# The real git, behind the /usr/local/bin/git -> agentsign shim.
+
+# The bot is identified by the folder git runs in. MausBot runs each
+# conversation in task-workspaces/<bot-id>/<thread-id>/ and binds it, and the
+# bot's home workspaces/<bot-id>/, into the sandbox at the same paths. A bot
+# sees only its own folders, so it can't claim another bot's identity.
+# (OMB_BOT_ID is not passed to the engine's shell, so it can't be used.)
+path_rules = [
+  "/data/.openmausbot/task-workspaces/{agent}/",
+  "/data/.openmausbot/workspaces/{agent}/",
+]
+
+# The real binaries behind the /usr/local/bin/git and /usr/local/bin/gh shims.
 git = "/usr/bin/git"
+gh = "/usr/bin/gh"

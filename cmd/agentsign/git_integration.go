@@ -45,7 +45,9 @@ func (a *app) cmdCredential(args []string) error {
 	}
 	r, err := a.resolveAgent()
 	if errors.Is(err, resolve.ErrNoAgent) {
-		a.debugf("credential: no agent identified")
+		// Still exit 0 with no output, so any other helper can answer; the
+		// hint goes to stderr, which git shows to whoever is pushing.
+		a.warnf("credential: no agent identified for this folder or environment, so no token was sent; %s", doctorHint)
 		return nil
 	}
 	if err != nil {
@@ -95,6 +97,10 @@ func (a *app) cmdCredential(args []string) error {
 	return (&credential.Response{Username: user, Password: tok, Expiry: ag.TokenExpiry}).Write(a.stdout)
 }
 
+// doctorHint ends refusal messages, so an agent that hits one checks its
+// setup instead of guessing (e.g. setting git user.email by hand).
+const doctorHint = "run `agentsign doctor` to see what's wrong"
+
 // cmdSign stands in for ssh-keygen as git's gpg.ssh.program.
 func (a *app) cmdSign(args []string) error {
 	c, err := a.config()
@@ -108,17 +114,17 @@ func (a *app) cmdSign(args []string) error {
 
 	_, ag, err := a.currentAgent()
 	if errors.Is(err, resolve.ErrNoAgent) {
-		return errors.New("refusing to sign: no agent identified (set AGENTSIGN_AGENT or pass --agent)")
+		return fmt.Errorf("refusing to sign: no agent identified for this folder or environment; %s", doctorHint)
 	}
 	if err != nil {
-		return fmt.Errorf("refusing to sign: %w", err)
+		return fmt.Errorf("refusing to sign: %w; %s", err, doctorHint)
 	}
 	if err := store.CheckPerm(ag.KeyPath()); err != nil {
 		return fmt.Errorf("refusing to sign: %w", err)
 	}
 	if op == sign.OpSign {
 		if err := sign.CheckBufferIdentity(args, ag.Email); err != nil {
-			return fmt.Errorf("refusing to sign as agent %s: %w", ag.ID, err)
+			return fmt.Errorf("refusing to sign as agent %s: %w (don't set git user.name/user.email or GIT_* identity yourself; %s)", ag.ID, err, doctorHint)
 		}
 	}
 	a.debugf("sign: %s with key of agent %s", op, ag.ID)
@@ -196,9 +202,10 @@ func isGitShim(argv0 string) bool {
 	return b == "git" || b == "git.exe"
 }
 
-// cmdGitShim is `agentsign git` for shim invocations, except that with no
-// agent identified it runs the real git unchanged, so humans and build
-// steps in the same container are unaffected.
+// cmdGitShim is `agentsign git` for shim invocations, except that it runs
+// the real git unchanged when no agent is identified (humans and build
+// steps in the same container are unaffected) or when the caller has set a
+// different identity itself (e.g. a platform's own checkpoint commits).
 func (a *app) cmdGitShim(args []string) error {
 	_, ag, err := a.currentAgent()
 	switch {
@@ -207,8 +214,24 @@ func (a *app) cmdGitShim(args []string) error {
 	case err != nil:
 		a.warnf("git: %v; running git without an agent identity", err)
 		ag = nil
+	case a.callerSetOtherIdentity(ag):
+		a.debugf("git: caller set its own GIT_AUTHOR_*/GIT_COMMITTER_*; leaving identity alone")
+		ag = nil
 	}
 	return a.runGit(args, ag)
+}
+
+// callerSetOtherIdentity reports whether the environment already sets a git
+// identity other than the agent's. `eval "$(agentsign env)"` sets the
+// agent's own identity, which doesn't count.
+func (a *app) callerSetOtherIdentity(ag *store.Agent) bool {
+	set := false
+	for _, k := range []string{"GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		if a.getenv(k) != "" {
+			set = true
+		}
+	}
+	return set && !strings.EqualFold(a.getenv("GIT_COMMITTER_EMAIL"), ag.Email)
 }
 
 // runGit runs the real git. With an agent, it sets the agent's identity and
@@ -229,10 +252,16 @@ func (a *app) runGit(args []string, ag *store.Agent) error {
 		// even if detection would otherwise differ (e.g. git -C elsewhere).
 		env = append(env, "AGENTSIGN_AGENT="+ag.ID)
 	}
-	cmd := exec.Command(gitBin, args...)
+	return a.runReal(gitBin, args, env)
+}
+
+// runReal runs a real binary with the given environment, passing through
+// standard streams and the exit code.
+func (a *app) runReal(bin string, args, env []string) error {
+	cmd := exec.Command(bin, args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = a.stdin, a.stdout, a.stderr
 	cmd.Env = env
-	err = cmd.Run()
+	err := cmd.Run()
 	var ee *exec.ExitError
 	if errors.As(err, &ee) {
 		return exitError(ee.ExitCode())
@@ -244,34 +273,43 @@ func (a *app) runGit(args []string, ag *store.Agent) error {
 // call), the config's git setting, or the first git on PATH that isn't this
 // binary (a shim symlink or copy).
 func (a *app) realGit() (string, error) {
+	configured := ""
+	if c, err := a.config(); err == nil {
+		configured = c.Git
+	}
+	return a.realBinary("git", EnvRealGit, configured)
+}
+
+// realBinary finds the real program behind a shim of the same name.
+func (a *app) realBinary(name, envKey, configured string) (string, error) {
 	self, _ := os.Executable()
 	isSelf := func(p string) bool { return self != "" && sameFile(p, self) }
 
-	if p := a.getenv(EnvRealGit); p != "" && !isSelf(p) {
+	if p := a.getenv(envKey); p != "" && !isSelf(p) {
 		return p, nil
 	}
-	if c, err := a.config(); err == nil && c.Git != "" {
-		if isSelf(c.Git) {
-			return "", fmt.Errorf("config git = %q points at agentsign itself", c.Git)
+	if configured != "" {
+		if isSelf(configured) {
+			return "", fmt.Errorf("config %s = %q points at agentsign itself", name, configured)
 		}
-		return c.Git, nil
+		return configured, nil
 	}
-	name := "git"
+	file := name
 	if runtime.GOOS == "windows" {
-		name = "git.exe"
+		file += ".exe"
 	}
 	for _, dir := range filepath.SplitList(a.getenv("PATH")) {
 		if dir == "" {
 			continue
 		}
-		p := filepath.Join(dir, name)
+		p := filepath.Join(dir, file)
 		fi, err := os.Stat(p)
 		if err != nil || fi.IsDir() || (runtime.GOOS != "windows" && fi.Mode()&0o111 == 0) || isSelf(p) {
 			continue
 		}
 		return p, nil
 	}
-	return "", errors.New(`real git not found on PATH (set git = "/usr/bin/git" in the agentsign config)`)
+	return "", fmt.Errorf(`real %s not found on PATH (set %s = "/usr/bin/%s" in the agentsign config)`, name, name, name)
 }
 
 // gitSubcommand returns the index of git's subcommand in args (skipping

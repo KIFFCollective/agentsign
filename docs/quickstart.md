@@ -124,7 +124,7 @@ You can also edit `repos = [...]` in the agent's `agent.toml` by hand. `agentsig
 The agent process needs:
 
 - the agent id: `AGENTSIGN_AGENT=dev`, a configured variable such as `OMB_BOT_ID`, or a repo under a path rule
-- its git identity: `eval "$(agentsign env)"`, or use `agentsign git ...` instead of `git`
+- its git identity: link `git` (and `gh`) to agentsign so it is automatic (see "Shims" below), or use `eval "$(agentsign env)"` / `agentsign git ...`
 
 Run `agentsign doctor --remote https://github.com/acme/app.git` as the agent to check the setup end to end (see step 3).
 
@@ -165,7 +165,7 @@ Agent: Pip <pip@troupe.nexus>
 ```
 
 - `agentsign git commit ...` adds it automatically.
-- In containers, link `git` to agentsign ahead of the real git on PATH (`ln -s /usr/local/bin/agentsign /usr/local/bin/git`). Then a plain `git commit` gets the agent's identity and trailer, and with no agent set git runs unchanged. See the [MausBot integration](../integrations/mausbot/README.md#every-git-goes-through-agentsign).
+- With the `git` shim (below), a plain `git commit` gets it automatically.
 - If an agent runs plain `git commit` and writes its own messages, tell it to end every message with the output of `agentsign trailer`. For example, put this in the agent's instructions: *"End every commit message with a blank line and the line printed by `agentsign trailer`."*
 
 On its own the trailer is just text, so `verify` checks it:
@@ -182,6 +182,22 @@ The Action posts a commit status on every commit it checks. It appears in the ch
 - ❌ `signed with odin@troupe.nexus's key but committer is pip@troupe.nexus`
 
 This needs `statuses: write` in the workflow's permissions. If the token can't post statuses, for example on a PR from a fork, the Action warns and carries on. Turn it off with `post-statuses: false`.
+
+## Shims: plain `git` and `gh`
+
+On agent hosts and containers, link both tools to agentsign ahead of the real ones on PATH:
+
+```sh
+ln -s /usr/local/bin/agentsign /usr/local/bin/git
+ln -s /usr/local/bin/agentsign /usr/local/bin/gh
+```
+
+Agents then need nothing beyond `git` and `gh`:
+
+- **`git`:** when an agent is identified, it runs the real git with the agent's identity, and `git commit` adds the `Agent:` trailer. Otherwise, or when the caller sets its own `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, it runs git unchanged.
+- **`gh`:** when an agent is identified, it runs the real GitHub CLI with the agent's token in `GH_TOKEN`, for that call only, so the token never lands in `~/.config/gh/hosts.yml`. `gh auth login`, `setup-git` and similar are refused for agents. Otherwise gh runs unchanged.
+
+The real binaries are found on PATH (skipping agentsign itself), or pinned with `git = "..."` and `gh = "..."` in the config. `agentsign doctor` warns about stored gh tokens or `GH_TOKEN`/`GITHUB_TOKEN` in the environment, which bypass agentsign.
 
 ## Squash merges
 

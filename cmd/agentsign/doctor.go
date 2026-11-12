@@ -72,6 +72,7 @@ func (a *app) cmdDoctor(args []string) error {
 		d.report(lvlOK, "ssh-keygen", "%s", p)
 	}
 	d.checkGitConfig()
+	d.checkGHCredentials()
 
 	r, err := a.resolveAgent()
 	switch {
@@ -152,6 +153,29 @@ func (d *doctor) checkGitConfig() {
 	}
 	if v := gitConfigGet("--get", "user.email"); len(v) > 0 && v[0] != "" {
 		d.report(lvlWarn, "user.email", "set to %s in git config; agents should get identity from the environment", v[0])
+	}
+}
+
+// checkGHCredentials warns about GitHub tokens that bypass agentsign: a
+// token stored by `gh auth login`, or one in the environment. On hosts where
+// agents share a home, a stored token is readable by all of them.
+func (d *doctor) checkGHCredentials() {
+	clean := true
+	for _, k := range []string{"GH_TOKEN", "GITHUB_TOKEN"} {
+		if d.a.getenv(k) != "" {
+			d.report(lvlWarn, "gh token", "%s is set in the environment; gh and other tools use it instead of the agent's token", k)
+			clean = false
+		}
+	}
+	if p := d.a.ghHostsFile(); p != "" {
+		if data, err := os.ReadFile(p); err == nil && strings.Contains(string(data), "oauth_token") {
+			d.report(lvlWarn, "gh token", "%s holds a stored token (from gh auth login), readable by anything sharing this home "+
+				"and not limited to the agent's repos; remove it and use the gh shim", p)
+			clean = false
+		}
+	}
+	if clean {
+		d.report(lvlOK, "gh token", "no stored or environment GitHub token bypassing agentsign")
 	}
 }
 
