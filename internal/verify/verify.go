@@ -26,7 +26,15 @@ type HumanPolicy string
 const (
 	HumansAllow HumanPolicy = "allow" // accept (leave to other checks)
 	HumansDeny  HumanPolicy = "deny"  // only agent commits allowed
+	// HumansGitHubVerified accepts a human commit only if GitHub marks it
+	// Verified (this covers GitHub's own web-flow merge commits). Needs
+	// Options.HumanCheck.
+	HumansGitHubVerified HumanPolicy = "github-verified"
 )
+
+// HumanCheck decides whether a non-agent commit is acceptable, returning a
+// short detail for the report (e.g. GitHub's verification reason).
+type HumanCheck func(ctx context.Context, sha string) (ok bool, detail string, err error)
 
 // Options configure a verification run.
 type Options struct {
@@ -39,8 +47,10 @@ type Options struct {
 	AgentDomains []string
 	// RequireAuthorMatch: agent commits must have author == committer.
 	RequireAuthorMatch bool
-	Git                string // git binary, default "git"
-	SSHKeygen          string // ssh-keygen binary, default "ssh-keygen"
+	// HumanCheck is used by the github-verified policy.
+	HumanCheck HumanCheck
+	Git        string // git binary, default "git"
+	SSHKeygen  string // ssh-keygen binary, default "ssh-keygen"
 }
 
 // Status of a single commit.
@@ -90,8 +100,14 @@ func Run(ctx context.Context, opts Options) (*Report, error) {
 	if opts.Humans == "" {
 		opts.Humans = HumansAllow
 	}
-	if opts.Humans != HumansAllow && opts.Humans != HumansDeny {
-		return nil, fmt.Errorf("unknown human policy %q", opts.Humans)
+	switch opts.Humans {
+	case HumansAllow, HumansDeny:
+	case HumansGitHubVerified:
+		if opts.HumanCheck == nil {
+			return nil, fmt.Errorf("human policy %s needs a GitHub client", opts.Humans)
+		}
+	default:
+		return nil, fmt.Errorf("unknown human policy %q (want allow, deny or github-verified)", opts.Humans)
 	}
 	signersPath, err := filepath.Abs(opts.SignersFile)
 	if err != nil {
@@ -148,8 +164,18 @@ func checkCommit(ctx context.Context, opts Options, signersPath string, sf *sign
 		if d := domainOf(committer); d != "" && containsFold(opts.AgentDomains, d) {
 			return fail(res, fmt.Sprintf("committer %s is on agent domain %s but is not a registered agent", c.committerEmail, d))
 		}
-		if opts.Humans == HumansDeny {
+		switch opts.Humans {
+		case HumansDeny:
 			return fail(res, "committer is not a registered agent and human commits are denied")
+		case HumansGitHubVerified:
+			ok, detail, err := opts.HumanCheck(ctx, c.sha)
+			if err != nil {
+				// Fail closed: an unreachable API must not let commits through.
+				return fail(res, "could not check GitHub verification: "+err.Error())
+			}
+			if !ok {
+				return fail(res, "human commit is not Verified on GitHub ("+detail+")")
+			}
 		}
 		res.Status = StatusHuman
 		return res

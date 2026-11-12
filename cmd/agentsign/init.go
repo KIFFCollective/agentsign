@@ -18,10 +18,11 @@ import (
 const SigningKeyPlaceholder = "agentsign"
 
 func (a *app) cmdInit(args []string) error {
-	fls := a.newFlags("init", "init [--global|--system|--file FILE] [--store DIR] [--env VAR]... [--path-rule RULE]... [--host HOST]...")
-	system := fls.Bool("system", false, "write the shared git config to the system gitconfig")
-	global := fls.Bool("global", false, "write the shared git config to the user's ~/.gitconfig (default)")
-	file := fls.String("file", "", "write the shared git config to FILE (include it with include.path)")
+	fls := a.newFlags("init", "init --global|--system|--file FILE [--agent-host] [--store DIR] [--env VAR]... [--path-rule RULE]... [--host HOST]...")
+	system := fls.Bool("system", false, "write the shared git config to the system gitconfig (agent hosts only)")
+	global := fls.Bool("global", false, "write the shared git config to the user's ~/.gitconfig (agent hosts only)")
+	file := fls.String("file", "", "write the shared git config to FILE; agents load it with GIT_CONFIG_GLOBAL=FILE (safe on a human's machine)")
+	agentHost := fls.Bool("agent-host", false, "confirm this host is for agents only, overriding the check for a human's existing git identity and credentials")
 	storeDir := fls.String("store", "", "agent store folder; may contain {agent}")
 	exe := fls.String("exe", "", "path git should use to run agentsign (default: this binary)")
 	dryRun := fls.Bool("dry-run", false, "print what would be done without changing anything")
@@ -38,13 +39,17 @@ func (a *app) cmdInit(args []string) error {
 		return exitError(2)
 	}
 
-	scope := []string{"--global"}
+	var scope []string
 	switch {
-	case btoi(*system)+btoi(*global)+btoi(*file != "") > 1:
-		return errors.New("choose one of --system, --global or --file")
+	case btoi(*system)+btoi(*global)+btoi(*file != "") != 1:
+		return errors.New("choose one of --global, --system or --file FILE.\n" +
+			"  --global/--system make every git command on this host sign and push as an agent (and refuse when no agent is set):\n" +
+			"  use them only on hosts dedicated to agents. On a human's machine use --file and have agents set GIT_CONFIG_GLOBAL=FILE")
 	case *system:
 		scope = []string{"--system"}
-	case *file != "":
+	case *global:
+		scope = []string{"--global"}
+	default:
 		scope = []string{"--file", *file}
 	}
 	if len(hosts) == 0 {
@@ -116,6 +121,24 @@ func (a *app) cmdInit(args []string) error {
 		[]string{"user.useConfigOnly", "true"},
 	)
 
+	// Writing to --global or --system takes over every git command on this
+	// host. If that config already holds a human's identity, signing setup
+	// or credentials, this is probably someone's workstation: stop.
+	if !*agentHost && scope[0] != "--file" {
+		if found := humanGitConfig(scope, gitPath); len(found) > 0 {
+			msg := fmt.Sprintf("git config %s looks like a person's, not an agent host's:\n  %s\n"+
+				"agentsign would replace this, and every git command here would then sign and push as an agent\n"+
+				"(or refuse when no agent is set). Either:\n"+
+				"  - use --file FILE and have agents set GIT_CONFIG_GLOBAL=FILE (leaves this config alone), or\n"+
+				"  - re-run with --agent-host if this host really is only for agents",
+				strings.Join(scope, " "), strings.Join(found, "\n  "))
+			if !*dryRun {
+				return errors.New(msg)
+			}
+			a.warnf("%s", msg)
+		}
+	}
+
 	if *dryRun {
 		fmt.Fprintf(a.stdout, "# would write %s:\n%s\n", cfgPath, body)
 		if !strings.Contains(cfg.Store, config.AgentPlaceholder) {
@@ -153,12 +176,61 @@ func (a *app) cmdInit(args []string) error {
 		}
 	}
 	fmt.Fprintf(a.stdout, "Git:     shared config written (%s)\n", strings.Join(scope, " "))
+	if scope[0] == "--file" {
+		abs, _ := filepath.Abs(*file)
+		fmt.Fprintf(a.stdout, "\ngit doesn't read %s by itself. Start each agent with GIT_CONFIG_GLOBAL=%s\n", *file, abs)
+	}
 
 	if def, _ := config.DefaultPath(); cfgPath != def {
 		fmt.Fprintf(a.stdout, "\nThe config is not in the default location; set %s=%s for every agent.\n", config.EnvConfig, cfgPath)
 	}
 	fmt.Fprintln(a.stdout, "\nNext: agentsign agent add <id> --name NAME --email EMAIL")
 	return nil
+}
+
+// humanGitConfig lists settings in the given git config scope that belong to
+// a person rather than to agentsign: an identity, signing setup or credential
+// helpers. Values agentsign itself writes are ignored, so re-running init on
+// an agent host passes.
+func humanGitConfig(scope []string, gitPath string) []string {
+	args := append([]string{"config"}, scope...)
+	args = append(args, "--get-regexp", `^(user\.(name|email|signingkey)|gpg\.|credential\.)`)
+	out, err := exec.Command("git", args...).Output()
+	if err != nil {
+		return nil // exit 1: nothing matched (or no such file)
+	}
+	ours := func(key, val string) bool {
+		switch {
+		case key == "user.signingkey":
+			return val == SigningKeyPlaceholder
+		case key == "gpg.format":
+			return val == "ssh"
+		case key == "gpg.ssh.program":
+			return val == gitPath
+		case strings.HasSuffix(key, ".helper"):
+			return val == "" || strings.Contains(val, gitPath)
+		}
+		return false
+	}
+	var found []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		key, val, _ := strings.Cut(line, " ")
+		if key == "" {
+			continue
+		}
+		lk := strings.ToLower(key)
+		if strings.HasPrefix(lk, "credential.") && !strings.HasSuffix(lk, ".helper") {
+			continue // useHttpPath, username etc. are harmless
+		}
+		if strings.HasPrefix(lk, "gpg.") && lk != "gpg.format" && lk != "gpg.program" && lk != "gpg.ssh.program" {
+			continue
+		}
+		if ours(lk, val) {
+			continue
+		}
+		found = append(found, key+" = "+val)
+	}
+	return found
 }
 
 func writeConfig(path, body string, force bool) error {

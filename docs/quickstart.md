@@ -23,7 +23,27 @@ This writes:
   - `commit.gpgSign = true`, `tag.gpgSign = true`.
   - `user.useConfigOnly = true`: git refuses to commit unless the agent's identity is set.
 
-Use `--dry-run` to see the changes first, and `--system` or `--file` for other scopes.
+Use `--dry-run` to see the changes first.
+
+### Choosing a scope
+
+You must pick one scope. There is no default.
+
+| Scope | Use it when |
+|---|---|
+| `--global` | The host (or the user account the agents run as) is used only by agents. |
+| `--system` | A dedicated agent host or image where every user is an agent. |
+| `--file FILE` | Anywhere else, **including a person's own machine**. Start each agent with `GIT_CONFIG_GLOBAL=FILE`. Your own git config is untouched. |
+
+With `--global` or `--system`, *every* git command run under that config signs and pushes as an agent, and refuses when no agent is set. Because of this, `init` checks the target config first. If it finds a person's settings, it stops and lists them:
+
+- `user.name`, `user.email` or `user.signingKey`
+- `gpg.format`, `gpg.program` or `gpg.ssh.program`
+- any credential helper
+
+Values that agentsign wrote itself don't count, so re-running `init` on an agent host works. If the host really is only for agents, re-run with `--agent-host` to go ahead anyway.
+
+On Windows, `--system` will usually be refused, because Git for Windows sets `credential.helper = manager` system-wide.
 
 ## 3. Add an agent
 
@@ -98,7 +118,16 @@ Run `agentsign doctor --remote https://github.com/acme/app.git` as the agent to 
    Regenerate it whenever agents are added, rotated or revoked.
 
 2. Add the verify Action (see the README) and make it a **required** status check.
-3. Require human review on the default branch.
+3. Choose a policy for commits whose committer isn't an agent (`humans`):
+
+   | Policy | Effect |
+   |---|---|
+   | `allow` (default) | Accepted; left to other checks such as review. |
+   | `deny` | Only agent commits are allowed. GitHub's own merge commits fail too. |
+   | `github-verified` | Accepted only if GitHub marks the commit Verified. This covers GitHub's own web-flow merge commits. It uses the GitHub API with the job's token and fails closed if the API can't be reached. |
+
+   With `github-verified`, **also set `agent-domains`**. GitHub marks any email on the machine account as Verified. Without it, an agent email that is missing from `allowed_signers` (for example a new agent before you regenerate the file) would pass as a human. `verify` warns when it isn't set.
+4. Require human review on the default branch.
 
 ## Squash merges
 

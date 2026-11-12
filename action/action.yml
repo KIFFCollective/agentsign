@@ -12,8 +12,13 @@ inputs:
     description: Revision range to check. Defaults to the PR's base..head.
     default: ""
   humans:
-    description: Policy for non-agent committers, allow or deny.
+    description: >
+      Policy for non-agent committers: allow, deny, or github-verified (accept only
+      commits GitHub marks Verified, including its own merge commits; set agent-domains too).
     default: allow
+  token:
+    description: Token for GitHub API lookups (github-verified policy). Needs contents:read.
+    default: ${{ github.token }}
   agent-domains:
     description: Space-separated email domains reserved for agents. Unknown committers on them fail.
     default: ""
@@ -40,6 +45,7 @@ runs:
         INPUT_HUMANS: ${{ inputs.humans }}
         INPUT_DOMAINS: ${{ inputs.agent-domains }}
         INPUT_AUTHOR_MATCH: ${{ inputs.require-author-match }}
+        GITHUB_TOKEN: ${{ inputs.token }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       run: |

@@ -18,6 +18,8 @@ See [docs/SPEC.md](docs/SPEC.md) for the design and [docs/security.md](docs/secu
 go install github.com/KIFFCollective/agentsign/cmd/agentsign@latest
 
 # Once per host: config, agent store and the shared git config.
+# --global takes over all git on this account: agent hosts only. On your own
+# machine use --file ~/.config/agentsign/gitconfig and GIT_CONFIG_GLOBAL.
 agentsign init --global --env OMB_BOT_ID --path-rule '/workspaces/{agent}/'
 
 # Once per agent.
@@ -53,6 +55,7 @@ See [docs/quickstart.md](docs/quickstart.md) for the GitHub side (emails, signin
   with:
     signers: .github/allowed_signers
     agent-domains: bots.acme.dev
+    humans: github-verified   # or allow (default) / deny
 ```
 
 Make the check required in branch protection.

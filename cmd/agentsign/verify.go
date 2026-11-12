@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/KIFFCollective/agentsign/internal/github"
 	"github.com/KIFFCollective/agentsign/internal/verify"
 )
 
@@ -12,7 +14,8 @@ func (a *app) cmdVerify(args []string) error {
 	fs := a.newFlags("verify", "verify [flags] <revision range, e.g. origin/main..HEAD>")
 	signersFile := fs.String("signers", ".github/allowed_signers", "allowed_signers file")
 	repo := fs.String("repo", "", "repository folder (default: current)")
-	humans := fs.String("humans", "allow", "policy for non-agent committers: allow or deny")
+	humans := fs.String("humans", "allow", "policy for non-agent committers: allow, deny or github-verified (needs $GITHUB_TOKEN)")
+	ghRepo := fs.String("github-repo", "", "owner/name for github-verified lookups (default $GITHUB_REPOSITORY)")
 	authorMatch := fs.Bool("require-author-match", false, "agent commits must have author == committer")
 	format := fs.String("format", "text", "output: text, markdown or json")
 	summary := fs.String("summary", "", "also append a markdown report to FILE (e.g. $GITHUB_STEP_SUMMARY)")
@@ -30,7 +33,7 @@ func (a *app) cmdVerify(args []string) error {
 	if err != nil {
 		return err
 	}
-	rep, err := verify.Run(context.Background(), verify.Options{
+	opts := verify.Options{
 		RepoDir:            *repo,
 		Range:              pos[0],
 		SignersFile:        *signersFile,
@@ -38,7 +41,19 @@ func (a *app) cmdVerify(args []string) error {
 		AgentDomains:       domains,
 		RequireAuthorMatch: *authorMatch,
 		SSHKeygen:          c.SSHKeygen,
-	})
+	}
+	if opts.Humans == verify.HumansGitHubVerified {
+		check, err := a.githubHumanCheck(*ghRepo)
+		if err != nil {
+			return err
+		}
+		opts.HumanCheck = check
+		if len(domains) == 0 {
+			a.warnf("with --humans github-verified, set --agent-domain: GitHub marks ANY email on the machine account " +
+				"as Verified, so an agent email missing from allowed_signers would pass as a human")
+		}
+	}
+	rep, err := verify.Run(context.Background(), opts)
 	if err != nil {
 		return err
 	}
@@ -72,6 +87,27 @@ func (a *app) cmdVerify(args []string) error {
 		return exitError(1)
 	}
 	return nil
+}
+
+// githubHumanCheck asks the GitHub API whether a commit is Verified.
+func (a *app) githubHumanCheck(repo string) (verify.HumanCheck, error) {
+	if repo == "" {
+		repo = a.getenv("GITHUB_REPOSITORY")
+	}
+	if repo == "" {
+		return nil, errors.New("--humans github-verified needs --github-repo owner/name (or $GITHUB_REPOSITORY)")
+	}
+	client := github.NewFromEnv(a.getenv)
+	if client.Token == "" {
+		a.warnf("no GITHUB_TOKEN or GH_TOKEN set; unauthenticated API calls are heavily rate limited and can't see private repos")
+	}
+	return func(ctx context.Context, sha string) (bool, string, error) {
+		v, err := client.CommitVerification(ctx, repo, sha)
+		if err != nil {
+			return false, "", err
+		}
+		return v.Verified, v.Reason, nil
+	}, nil
 }
 
 func (a *app) cmdGitHub(args []string) error {
