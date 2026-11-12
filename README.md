@@ -10,7 +10,7 @@ Each coding agent gets its own commit email, SSH signing key and fine-grained to
 
 See [docs/SPEC.md](docs/SPEC.md) for the design and [docs/security.md](docs/security.md) for the threat model.
 
-> **Status:** early development (phase 1, MVP). Not yet released.
+> **Status:** early development. v0.1.0 is the first release; expect breaking changes before v1.0.
 
 ## Install
 
