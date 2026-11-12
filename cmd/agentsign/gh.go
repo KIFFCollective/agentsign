@@ -58,18 +58,25 @@ func (a *app) cmdGHShim(args []string) error {
 	env = withoutEnv(env, "GH_TOKEN", "GITHUB_TOKEN")
 	env = append(env, "AGENTSIGN_AGENT="+ag.ID)
 
+	// gh api has no -R; agents may still pass one to say which repo the
+	// call is for. It's used for scoping below, then removed.
+	runArgs := args
+	if len(args) > 0 && args[0] == "api" {
+		runArgs = stripRepoFlag(args)
+	}
+
 	// Apply the agent's repo list, as the credential helper does for git.
 	if len(ag.Repos) > 0 {
 		targets, unknown := a.ghTargets(args)
 		if unknown != "" {
-			a.warnf("gh: no token given to this call: %s. Agent %s is limited to %s; pass -R OWNER/REPO",
+			a.warnf("gh: no token given to this call: %s. (Agent %s is limited to %s.)",
 				unknown, ag.ID, strings.Join(ag.Repos, ", "))
-			return a.runReal(ghBin, args, env)
+			return a.runReal(ghBin, runArgs, env)
 		}
 		for _, t := range targets {
 			if t.host != "github.com" {
 				a.warnf("gh: no token given for host %s (agentsign handles github.com)", t.host)
-				return a.runReal(ghBin, args, env)
+				return a.runReal(ghBin, runArgs, env)
 			}
 			if !ag.AllowsRepo(t.repo) {
 				return fmt.Errorf("gh: agent %s is not allowed to access %s (from %s); allowed: %s",
@@ -87,7 +94,7 @@ func (a *app) cmdGHShim(args []string) error {
 	if err != nil {
 		return fmt.Errorf("gh: agent %s has no usable token (%v); %s", ag.ID, err, doctorHint)
 	}
-	return a.runReal(ghBin, args, append(env, "GH_TOKEN="+tok))
+	return a.runReal(ghBin, runArgs, append(env, "GH_TOKEN="+tok))
 }
 
 // ghTarget is a repository a gh call may act on.
@@ -134,17 +141,19 @@ func (a *app) ghTargets(args []string) ([]ghTarget, string) {
 			named = append(named, t)
 		}
 	}
-	if len(pos) >= 2 && pos[0] == "api" {
-		ep := strings.TrimPrefix(pos[1], "/")
-		parts := strings.Split(ep, "/")
+	isAPI := len(args) > 0 && args[0] == "api"
+	if isAPI {
+		ep, fields := ghAPIArgs(args[1:])
+		parts := strings.Split(strings.TrimPrefix(ep, "/"), "/")
 		switch {
 		case len(parts) >= 3 && parts[0] == "repos" && !strings.HasPrefix(parts[1], "{"):
-			named = append(named, ghTarget{host: "github.com", repo: parts[1] + "/" + parts[2], source: "gh api " + pos[1]})
-		case len(parts) >= 3 && parts[0] == "repos":
-			// {owner}/{repo}: gh fills these from the checkout, below.
-		default:
-			return nil, fmt.Sprintf("gh api %s isn't scoped to one repository", pos[1])
+			named = append(named, ghTarget{host: "github.com", repo: parts[1] + "/" + parts[2], source: "gh api " + ep})
+		case ep == "graphql" && fields["owner"] != "" && fields["name"] != "" &&
+			!strings.HasPrefix(fields["owner"], "{") && !strings.HasPrefix(fields["name"], "{"):
+			named = append(named, ghTarget{host: "github.com", repo: fields["owner"] + "/" + fields["name"], source: "gh api graphql owner/name fields"})
 		}
+		// Anything else ({owner}/{repo} placeholders, graphql, user, ...)
+		// falls back to the checkout below, as gh pr does.
 	}
 	if len(named) > 0 {
 		return named, ""
@@ -152,9 +161,78 @@ func (a *app) ghTargets(args []string) ([]ghTarget, string) {
 
 	remotes := a.checkoutRemotes()
 	if len(remotes) == 0 {
-		return nil, "not inside a checkout with a GitHub remote, and no -R given"
+		if isAPI {
+			return nil, "can't tell which repository this gh api call is for: run it inside a checkout of an allowed repo, " +
+				"use a repos/OWNER/REPO/... endpoint, or add -R OWNER/REPO (agentsign removes it before running gh)"
+		}
+		return nil, "not inside a checkout with a GitHub remote; pass -R OWNER/REPO"
 	}
 	return remotes, ""
+}
+
+// ghAPIValueFlags are gh api flags that take a value.
+var ghAPIValueFlags = map[string]bool{
+	"-X": true, "--method": true, "-H": true, "--header": true,
+	"-f": true, "--raw-field": true, "-F": true, "--field": true,
+	"--input": true, "-q": true, "--jq": true, "-t": true, "--template": true,
+	"--hostname": true, "--cache": true, "-p": true, "--preview": true,
+	"-R": true, "--repo": true,
+}
+
+// ghAPIArgs returns the endpoint of a gh api call (its first argument that
+// isn't a flag or a flag's value) and its -f/-F fields.
+func ghAPIArgs(args []string) (endpoint string, fields map[string]string) {
+	fields = map[string]string{}
+	field := func(kv string) {
+		if k, v, ok := strings.Cut(kv, "="); ok {
+			fields[k] = v
+		}
+	}
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			if endpoint == "" && i+1 < len(args) {
+				endpoint = args[i+1]
+			}
+			return endpoint, fields
+		case ghAPIValueFlags[a] && i+1 < len(args):
+			if a == "-f" || a == "-F" || a == "--field" || a == "--raw-field" {
+				field(args[i+1])
+			}
+			i++
+		case strings.HasPrefix(a, "--") && strings.Contains(a, "="):
+			name, val, _ := strings.Cut(a, "=")
+			if name == "--field" || name == "--raw-field" {
+				field(val)
+			}
+		case len(a) > 2 && (strings.HasPrefix(a, "-f") || strings.HasPrefix(a, "-F")):
+			field(a[2:])
+		case strings.HasPrefix(a, "-"):
+		case endpoint == "":
+			endpoint = a
+		}
+	}
+	return endpoint, fields
+}
+
+// stripRepoFlag removes -R/--repo from args. gh api doesn't accept it, but
+// agents may pass it to tell agentsign which repo the call is for.
+func stripRepoFlag(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return append(out, args[i:]...)
+		case (a == "-R" || a == "--repo") && i+1 < len(args):
+			i++
+		case strings.HasPrefix(a, "--repo="), strings.HasPrefix(a, "-R") && len(a) > 2:
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // checkoutRemotes returns the GitHub repos of the current checkout's

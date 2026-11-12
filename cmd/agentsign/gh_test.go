@@ -67,9 +67,16 @@ func TestGHTargets(t *testing.T) {
 		{"repo clone acme/other", "acme/other", ""},
 		{"api repos/acme/other/pulls", "acme/other", ""},
 		{"api /repos/acme/other/pulls --paginate", "acme/other", ""},
-		{"api graphql -f query=x", "", "isn't scoped"},
-		{"api user", "", "isn't scoped"},
-		{"api repos/{owner}/{repo}/pulls", "", "not inside a checkout"},
+		{"api -X GET repos/acme/other/pulls", "acme/other", ""},
+		{"api --method=POST /repos/acme/app/issues -f title=x", "acme/app", ""},
+		{"api -H Accept:x -q .name repos/acme/app", "acme/app", ""},
+		{"api graphql -F owner=acme -F name=other -f query=x", "acme/other", ""},
+		{"api graphql -Fowner=acme --field=name=app", "acme/app", ""},
+		{"api graphql -R acme/app -f query=x", "acme/app", ""},
+		{"api graphql -F owner={owner} -F name={repo}", "", "can't tell which repository"},
+		{"api graphql -f query=x", "", "can't tell which repository"},
+		{"api user", "", "can't tell which repository"},
+		{"api repos/{owner}/{repo}/pulls", "", "can't tell which repository"},
 		{"pr list", "", "not inside a checkout"},
 	}
 	for _, tc := range cases {
@@ -80,6 +87,19 @@ func TestGHTargets(t *testing.T) {
 		}
 		if strings.Join(got, ",") != tc.want || (tc.unknown == "") != (unknown == "") || !strings.Contains(unknown, tc.unknown) {
 			t.Errorf("ghTargets(%q) = %v, %q want %q, %q", tc.args, got, unknown, tc.want, tc.unknown)
+		}
+	}
+}
+
+func TestStripRepoFlag(t *testing.T) {
+	for in, want := range map[string]string{
+		"api graphql -R acme/app -f query=x": "api graphql -f query=x",
+		"api user --repo=acme/app":           "api user",
+		"api user -Racme/app":                "api user",
+		"api -- -R literal":                  "api -- -R literal",
+	} {
+		if got := strings.Join(stripRepoFlag(strings.Fields(in)), " "); got != want {
+			t.Errorf("stripRepoFlag(%q) = %q want %q", in, got, want)
 		}
 	}
 }

@@ -100,10 +100,17 @@ func TestMausBotStyle(t *testing.T) {
 	ghCase(odinTask, false, "not allowed to access acme/other", "pr", "list", "-R", "acme/other")
 	ghCase(odinTask, false, "not allowed to access acme/other", "pr", "view", "https://github.com/acme/other/pull/1")
 	ghCase(odinTask, false, "not allowed to access acme/other", "api", "repos/acme/other/pulls")
-	ghCase(odinTask, false, "isn't scoped to one repository", "api", "graphql", "-f", "query=x")
+	ghCase(odinTask, true, "", "api", "graphql", "-f", "query=x")          // checkout fallback
+	ghCase(odinTask, true, "", "api", "-X", "GET", "repos/acme/app/pulls") // flag values skipped
+	ghCase(odinTask, false, "not allowed to access acme/other", "api", "-X", "GET", "repos/acme/other/pulls")
 	odinHome := filepath.Join(data, "workspaces", "bot-odin") // the bot's home: no checkout
 	ghCase(odinHome, false, "not inside a checkout", "pr", "list")
 	ghCase(odinHome, true, "", "pr", "list", "-R", "acme/app")
+	ghCase(odinHome, false, "can't tell which repository this gh api call is for", "api", "graphql", "-f", "query=x")
+	// -R on gh api: used for scoping, then removed (gh api rejects it).
+	if out := e.must(odinHome, env, "", gh, "api", "graphql", "-R", "acme/app", "-f", "query=x"); strings.TrimSpace(out) != "fakegh GH_TOKEN=tok-odin GITHUB_TOKEN= args=api graphql -f query=x" {
+		t.Errorf("gh api -R: want token and -R removed, got: %q", out)
+	}
 	// A second remote the agent can't use: gh might pick it, so no token.
 	e.must(odinTask, env, "", git, "remote", "add", "upstream", "https://github.com/acme/other.git")
 	ghCase(odinTask, false, "not allowed to access acme/other (from remote upstream)", "pr", "list")
