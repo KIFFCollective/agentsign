@@ -1,17 +1,18 @@
 # Add to the MausBot sandbox image (Debian/Ubuntu, amd64).
 
-# git and ssh-keygen (agentsign signs with it).
-RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client && rm -rf /var/lib/apt/lists/*
+# git, ssh-keygen (agentsign signs with it) and the GitHub CLI.
+RUN apt-get update && apt-get install -y --no-install-recommends git openssh-client gh && rm -rf /var/lib/apt/lists/*
 
 # agentsign from the GitHub release. --checksum makes the build fail if the
 # download isn't exactly this file (hash from the release's checksums.txt).
-ADD --checksum=sha256:8129164640075d58728cdf89224a03b94f342562a27482c3b605af43e39eab8c \
-    https://github.com/KIFFCollective/agentsign/releases/download/v0.1.0/agentsign_0.1.0_linux_amd64.tar.gz /tmp/agentsign.tar.gz
+ADD --checksum=sha256:2fec293d5b9ae937f91fdd64419de4e26b06dc6f3d1ab903bf2d5078a4d890c9 \
+    https://github.com/KIFFCollective/agentsign/releases/download/v0.1.1/agentsign_0.1.1_linux_amd64.tar.gz /tmp/agentsign.tar.gz
 
-# Install it, and make `git` run through agentsign so bots get their
-# identity and Agent: trailer on a plain `git commit`.
+# Install it, and make `git` and `gh` run through agentsign: bots get their
+# identity, Agent: trailer and token without doing anything.
 RUN tar -xzf /tmp/agentsign.tar.gz -C /usr/local/bin agentsign && rm /tmp/agentsign.tar.gz \
- && ln -s agentsign /usr/local/bin/git
+ && ln -s agentsign /usr/local/bin/git \
+ && ln -s agentsign /usr/local/bin/gh
 
 COPY integrations/mausbot/config.toml /etc/agentsign/config.toml
 COPY integrations/mausbot/gitconfig /etc/gitconfig
