@@ -1,0 +1,42 @@
+# Build output
+/agentsign
+/agentsign.exe
+/bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go tooling
+/vendor/
+coverage.*
+*.coverprofile
+go.work
+go.work.sum
+
+# Secrets: never commit agent material. allowed_signers (public keys) is fine.
+.agentsign/
+signing_key
+signing_key.old
+token
+*.pem
+*.key
+.env
+.env.*
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local Claude Code settings
+.claude/settings.local.json

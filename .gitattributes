@@ -1,0 +1,34 @@
+# Normalise line endings: LF in the repo and in working trees on every platform.
+* text=auto eol=lf
+
+# Source and config
+*.go       text eol=lf diff=golang
+go.mod     text eol=lf
+go.sum     text eol=lf merge=union linguist-generated
+*.md       text eol=lf diff=markdown
+*.toml     text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+*.sh       text eol=lf
+
+# allowed_signers and test fixtures must be byte-exact (signatures are checked against them).
+allowed_signers  text eol=lf
+**/testdata/**   -text
+
+# Windows-only scripts
+*.ps1      text eol=crlf
+*.bat      text eol=crlf
+*.cmd      text eol=crlf
+
+# Binary
+*.png      binary
+*.jpg      binary
+*.gif      binary
+*.ico      binary
+*.zip      binary
+*.gz       binary
+*.exe      binary
+
+# Keep docs out of language stats
+docs/**    linguist-documentation

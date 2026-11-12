@@ -1,0 +1,17 @@
+# Shared git config for every MausBot bot (equivalent to `agentsign init`).
+[credential "https://github.com"]
+	# Empty first: drop inherited helpers so human credentials are never used.
+	helper =
+	helper = /usr/local/bin/agentsign credential
+	useHttpPath = true
+[gpg]
+	format = ssh
+[gpg "ssh"]
+	program = /usr/local/bin/agentsign
+[user]
+	signingKey = agentsign
+	useConfigOnly = true
+[commit]
+	gpgSign = true
+[tag]
+	gpgSign = true

@@ -1,0 +1,11 @@
+# Add to the MausBot sandbox image.
+FROM golang:1.26 AS agentsign
+RUN CGO_ENABLED=0 go install -trimpath github.com/KIFFCollective/agentsign/cmd/agentsign@latest
+
+# ...in the final stage:
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=agentsign /go/bin/agentsign /usr/local/bin/agentsign
+COPY integrations/mausbot/config.toml /etc/agentsign/config.toml
+COPY integrations/mausbot/gitconfig /etc/gitconfig

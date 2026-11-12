@@ -1,0 +1,58 @@
+name: agentsign verify
+description: Check that every agent commit in a PR is signed by that agent's own key.
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  signers:
+    description: Path to the allowed_signers file.
+    default: .github/allowed_signers
+  range:
+    description: Revision range to check. Defaults to the PR's base..head.
+    default: ""
+  humans:
+    description: Policy for non-agent committers, allow or deny.
+    default: allow
+  agent-domains:
+    description: Space-separated email domains reserved for agents. Unknown committers on them fail.
+    default: ""
+  require-author-match:
+    description: Require author == committer for agent commits.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: ${{ github.action_path }}/../go.mod
+        cache: false
+    - name: Build agentsign
+      shell: bash
+      working-directory: ${{ github.action_path }}/..
+      run: go build -o "$RUNNER_TEMP/agentsign" ./cmd/agentsign
+    - name: Verify commits
+      shell: bash
+      env:
+        INPUT_SIGNERS: ${{ inputs.signers }}
+        INPUT_RANGE: ${{ inputs.range }}
+        INPUT_HUMANS: ${{ inputs.humans }}
+        INPUT_DOMAINS: ${{ inputs.agent-domains }}
+        INPUT_AUTHOR_MATCH: ${{ inputs.require-author-match }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        range="$INPUT_RANGE"
+        if [ -z "$range" ]; then
+          if [ -z "$BASE_SHA" ]; then
+            echo "::error::No range given and this is not a pull_request event"
+            exit 1
+          fi
+          range="$BASE_SHA..$HEAD_SHA"
+        fi
+        args=(verify --signers "$INPUT_SIGNERS" --humans "$INPUT_HUMANS" --summary "$GITHUB_STEP_SUMMARY")
+        for d in $INPUT_DOMAINS; do args+=(--agent-domain "$d"); done
+        if [ "$INPUT_AUTHOR_MATCH" = "true" ]; then args+=(--require-author-match); fi
+        "$RUNNER_TEMP/agentsign" "${args[@]}" "$range"

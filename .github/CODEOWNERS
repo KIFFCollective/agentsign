@@ -1,0 +1,5 @@
+# Security-sensitive code needs an owner's review.
+/internal/sign/        @ProbablePrime
+/internal/verify/      @ProbablePrime
+/internal/credential/  @ProbablePrime
+/action/               @ProbablePrime
