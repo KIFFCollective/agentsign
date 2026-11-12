@@ -2,7 +2,7 @@
 
 Per-agent git identities on one GitHub machine account. (`agentsign` is a working name.)
 
-Each coding agent gets its own commit email, SSH signing key and fine-grained token on a single machine account (e.g. `acme-bots`). Its commits show as **Verified** on GitHub under its own name. A CI check then confirms that each commit was signed by the key of the agent named as committer. GitHub doesn't check that part.
+Each coding agent gets its own commit email, SSH signing key and fine-grained token on a single machine account (e.g. `acme-bots`). Its commits show as **Verified** on GitHub. Each commit names its agent in an `Agent:` trailer and in a per-commit status, because GitHub itself shows every agent as the shared account. A CI check then confirms that each commit was signed by the key of the agent named as committer. GitHub doesn't check that part.
 
 - No GitHub App per agent and no token minting. Works on personal-account repos.
 - One shared git config for every agent. The calling agent is found at runtime from `--agent`, an environment variable or the repo's location.
