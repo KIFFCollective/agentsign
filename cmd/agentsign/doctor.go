@@ -2,16 +2,20 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/KIFFCollective/agentsign/internal/github"
 	"github.com/KIFFCollective/agentsign/internal/resolve"
 	"github.com/KIFFCollective/agentsign/internal/store"
 )
@@ -42,9 +46,10 @@ func (d *doctor) report(l checkLevel, name, format string, args ...any) {
 }
 
 func (a *app) cmdDoctor(args []string) error {
-	fs := a.newFlags("doctor", "doctor [--remote URL] [--signers FILE]")
-	remote := fs.String("remote", "", "HTTPS repo URL to test the agent's token against (git ls-remote)")
+	fs := a.newFlags("doctor", "doctor [--remote URL] [--signers FILE] [--offline]")
+	remote := fs.String("remote", "", "HTTPS repo URL; checks the agent's token can push to it (dry run)")
 	signersFile := fs.String("signers", "", "allowed_signers file to check is up to date")
+	offline := fs.Bool("offline", false, "skip GitHub API checks (token owner and expiry, signing key registered)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -75,7 +80,7 @@ func (a *app) cmdDoctor(args []string) error {
 	case err != nil:
 		d.report(lvlFail, "agent", "%v", err)
 	default:
-		d.checkAgent(r, *remote)
+		d.checkAgent(r, *remote, *offline)
 	}
 
 	if *signersFile != "" {
@@ -150,7 +155,7 @@ func (d *doctor) checkGitConfig() {
 	}
 }
 
-func (d *doctor) checkAgent(r *resolve.Result, remote string) {
+func (d *doctor) checkAgent(r *resolve.Result, remote string, offline bool) {
 	a := d.a
 	d.report(lvlOK, "agent", "%s (from %s %s)", r.ID, r.Source, r.Detail)
 	_, ag, err := a.loadAgent(r.ID)
@@ -184,30 +189,147 @@ func (d *doctor) checkAgent(r *resolve.Result, remote string) {
 			return
 		}
 	}
-	if _, err := ag.Token(); err != nil {
+	tok, err := ag.Token()
+	if err != nil {
 		d.report(lvlFail, "token", "%v (agentsign agent token %s)", err, ag.ID)
 		return
 	}
+
+	expiry, fromGitHub := ag.TokenExpiry, false
+	if !offline && ag.AllowsHost("github.com") {
+		if e, ok := d.checkGitHub(ag, tok, keyOK); ok {
+			expiry, fromGitHub = e, true
+		}
+	}
 	switch {
-	case ag.TokenExpiry == nil:
-		d.report(lvlWarn, "token", "present; expiry unknown (store it with --expires)")
-	case time.Until(*ag.TokenExpiry) <= 0:
-		d.report(lvlFail, "token", "expired %s", ag.TokenExpiry.Format("2006-01-02"))
-	case time.Until(*ag.TokenExpiry) < 7*24*time.Hour:
-		d.report(lvlWarn, "token", "expires %s", ag.TokenExpiry.Format("2006-01-02"))
+	case expiry == nil && fromGitHub:
+		d.report(lvlOK, "token expiry", "none (GitHub reports no expiry); an expiry plus rotation limits the damage of a leak")
+	case expiry == nil:
+		d.report(lvlWarn, "token expiry", "unknown (run doctor online, or store it with agent token --expires)")
+	case time.Until(*expiry) <= 0:
+		d.report(lvlFail, "token expiry", "expired %s", expiry.Format("2006-01-02"))
+	case time.Until(*expiry) < 7*24*time.Hour:
+		d.report(lvlWarn, "token expiry", "expires %s", expiry.Format("2006-01-02"))
 	default:
-		d.report(lvlOK, "token", "valid until %s", ag.TokenExpiry.Format("2006-01-02"))
+		d.report(lvlOK, "token expiry", "valid until %s", expiry.Format("2006-01-02"))
 	}
 
 	if remote != "" {
-		cmd := exec.Command("git", "ls-remote", "--heads", remote)
-		cmd.Env = append(os.Environ(), "AGENTSIGN_AGENT="+ag.ID, "GIT_TERMINAL_PROMPT=0")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			d.report(lvlFail, "remote", "%s: %s", remote, firstLine(string(out)))
-		} else {
-			d.report(lvlOK, "remote", "%s reachable with the agent's token", remote)
+		d.checkRemote(ag, remote)
+	}
+}
+
+// checkGitHub asks the GitHub API about the agent's token and signing key.
+// It returns the token's expiry and whether GitHub answered.
+func (d *doctor) checkGitHub(ag *store.Agent, tok string, checkKey bool) (*time.Time, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	base := d.a.getenv("GITHUB_API_URL")
+	if base == "" {
+		base = github.DefaultAPI
+	}
+	client := &github.Client{BaseURL: strings.TrimRight(base, "/"), Token: tok, HTTP: &http.Client{Timeout: 30 * time.Second}}
+
+	info, err := client.TokenInfo(ctx)
+	var apiErr *github.APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.Status == http.StatusUnauthorized:
+		d.report(lvlFail, "github token", "rejected by GitHub (%s): revoked, expired or mistyped", apiErr.Message)
+		return nil, false
+	case err != nil:
+		d.report(lvlWarn, "github token", "could not ask GitHub (%v); online checks skipped (--offline to silence)", err)
+		return nil, false
+	case ag.Username != "" && !strings.EqualFold(info.Login, ag.Username):
+		d.report(lvlWarn, "github token", "belongs to %s, but agent.toml has username = %q", info.Login, ag.Username)
+	default:
+		d.report(lvlOK, "github token", "accepted; belongs to %s", info.Login)
+	}
+
+	if checkKey {
+		d.checkGitHubKey(ctx, client, ag, info.Login)
+	}
+	return info.Expiry, true
+}
+
+// checkGitHubKey checks the agent's key is on the account as a signing key.
+// Adding it as an authentication key is an easy mistake: GitHub then shows
+// the agent's commits as Unverified (unknown_key).
+func (d *doctor) checkGitHubKey(ctx context.Context, client *github.Client, ag *store.Agent, login string) {
+	pub, err := ag.PublicKey()
+	if err != nil {
+		return
+	}
+	blob := github.KeyBlob(pub)
+	signing, err := client.SigningKeys(ctx, login)
+	if err != nil {
+		d.report(lvlWarn, "github key", "could not list %s's signing keys: %v", login, err)
+		return
+	}
+	if slices.Contains(signing, blob) {
+		d.report(lvlOK, "github key", "registered on %s as a signing key", login)
+		return
+	}
+	if auth, err := client.AuthKeys(ctx, login); err == nil && slices.Contains(auth, blob) {
+		d.report(lvlFail, "github key", "added to %s as an AUTHENTICATION key, not a signing key; GitHub will show commits as Unverified. "+
+			"Delete it and re-add it with Key type: Signing key", login)
+		return
+	}
+	d.report(lvlFail, "github key", "not on %s; add it as a signing key (agentsign agent show %s prints it)", login, ag.ID)
+}
+
+// checkRemote proves the agent's token can push, with a dry-run push of a
+// throwaway commit. Reading (ls-remote) isn't enough: public repos can be
+// read without any token.
+func (d *doctor) checkRemote(ag *store.Agent, remote string) {
+	dir, err := os.MkdirTemp("", "agentsign-remote")
+	if err != nil {
+		d.report(lvlFail, "remote", "%v", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+	env := append(os.Environ(), "AGENTSIGN_AGENT="+ag.ID, "GIT_TERMINAL_PROMPT=0")
+	for _, kv := range identityEnv(ag) {
+		env = append(env, kv[0]+"="+kv[1])
+	}
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	if out, err := run("init", "-q"); err != nil {
+		d.report(lvlFail, "remote", "git init: %s", out)
+		return
+	}
+	tree, err := run("mktree")
+	if err != nil {
+		d.report(lvlFail, "remote", "git mktree: %s", tree)
+		return
+	}
+	commit, err := run("commit-tree", "--no-gpg-sign", "-m", "agentsign doctor probe", tree)
+	if err != nil {
+		d.report(lvlFail, "remote", "git commit-tree: %s", commit)
+		return
+	}
+	if out, err := run("push", "--dry-run", remote, commit+":refs/heads/agentsign-doctor-probe"); err != nil {
+		d.report(lvlFail, "remote", "%s: the agent's token can't push: %s", remote, firstLine(lastLines(out)))
+		return
+	}
+	d.report(lvlOK, "remote", "%s: the agent's token can push (dry run)", remote)
+}
+
+// lastLines drops git's "To <url>" chatter, keeping the meaningful lines.
+func lastLines(s string) string {
+	var keep []string
+	for _, l := range strings.Split(s, "\n") {
+		if strings.HasPrefix(l, "agentsign: ") || strings.HasPrefix(l, "remote: ") || strings.HasPrefix(l, "fatal: ") || strings.HasPrefix(l, "error: ") {
+			keep = append(keep, l)
 		}
 	}
+	if len(keep) == 0 {
+		return s
+	}
+	return strings.Join(keep, "\n")
 }
 
 // checkTestSignature signs a scratch buffer with the agent's key and checks

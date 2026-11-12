@@ -59,6 +59,9 @@ func setup(t *testing.T) *env {
 		// git ignores empty values and then can't prompt at all.
 		"GIT_ASKPASS=",
 		"SSH_ASKPASS=",
+		// Never reach the real GitHub API from tests; tests that need it
+		// start a fake server and override this.
+		"GITHUB_API_URL=http://127.0.0.1:1",
 		"AGENTSIGN_CONFIG="+filepath.Join(root, "config.toml"),
 	)
 	return e

@@ -54,14 +54,35 @@ agentsign agent add dev --name Dev --email dev@bots.acme.dev --repo acme/app
 Then, signed in to GitHub as the machine account:
 
 1. **Emails:** add `dev@bots.acme.dev` and click the verification link.
-2. **SSH and GPG keys > New SSH key:** key type *Signing key*. Paste the public key that `agent add` printed (`agentsign agent show dev` prints it again).
-3. **Developer settings > Fine-grained tokens:** create a token with resource owner and repository access limited to this agent's repos. Give it *Contents: read and write*, plus *Pull requests* if the agent opens PRs. Then store it:
+2. **SSH and GPG keys > New SSH key:** paste the public key that `agent add` printed (`agentsign agent show dev` prints it again). Set **Key type: Signing key**. The default, *Authentication key*, is filed separately and GitHub won't use it to verify commits: they show as *Unverified (unknown_key)*.
+3. **Developer settings > Fine-grained tokens > Generate new token:**
+
+   | Setting | Value |
+   |---|---|
+   | Resource owner | **The owner of the repos.** For org repos that is the **organization**, not the machine account. A token owned by the machine account can't touch org repos (pushes fail with 403). It can't be changed later, so recreate the token if it's wrong. |
+   | Repository access | *Only select repositories*: this agent's repos. |
+   | Contents | Read and write (push commits). |
+   | Pull requests | Read and write, if the agent opens PRs. |
+   | Workflows | Read and write, if the agent edits files under `.github/workflows/`. |
+   | Expiration | Your choice. Shorter limits the damage of a leak. |
+
+   Organizations can require approval for fine-grained tokens. If so, approve the request under the org's **Settings > Personal access tokens > Pending requests** before the token works.
+
+   Then store it:
 
    ```sh
-   agentsign agent token dev --expires 2027-01-31 < token.txt
+   agentsign agent token dev < token.txt
    ```
 
 GitHub has no API for creating fine-grained tokens, so step 3 stays manual.
+
+Check everything as the agent:
+
+```sh
+AGENTSIGN_AGENT=dev agentsign doctor --remote https://github.com/acme/app.git
+```
+
+`doctor` asks GitHub whether the token is accepted, which account it belongs to and when it expires. It checks that the key is registered as a **signing** key, and does a dry-run push to prove the token can write. (A read check alone proves nothing on public repos, because they can be read without a token.) Use `--offline` to skip the GitHub checks.
 
 ## Repo access
 
@@ -105,7 +126,7 @@ The agent process needs:
 - the agent id: `AGENTSIGN_AGENT=dev`, a configured variable such as `OMB_BOT_ID`, or a repo under a path rule
 - its git identity: `eval "$(agentsign env)"`, or use `agentsign git ...` instead of `git`
 
-Run `agentsign doctor --remote https://github.com/acme/app.git` as the agent to check the setup end to end.
+Run `agentsign doctor --remote https://github.com/acme/app.git` as the agent to check the setup end to end (see step 3).
 
 ## 5. Protect the repo
 

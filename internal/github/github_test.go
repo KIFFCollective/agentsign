@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,6 +36,59 @@ func TestCommitVerification(t *testing.T) {
 	_, err = c.CommitVerification(context.Background(), "acme/other", sha)
 	if err == nil || !strings.Contains(err.Error(), "404: No commit found") {
 		t.Fatalf("want 404 error, got %v", err)
+	}
+}
+
+func TestTokenAndKeys(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user":
+			switch r.Header.Get("Authorization") {
+			case "Bearer expiring":
+				w.Header().Set("GitHub-Authentication-Token-Expiration", "2027-01-31 12:00:00 UTC")
+			case "Bearer forever":
+			default:
+				w.WriteHeader(http.StatusUnauthorized)
+				w.Write([]byte(`{"message":"Bad credentials"}`))
+				return
+			}
+			w.Write([]byte(`{"login":"bots"}`))
+		case "/users/bots/ssh_signing_keys":
+			w.Write([]byte(`[{"key":"ssh-ed25519 AAAAsign"}]`))
+		case "/users/bots/keys":
+			w.Write([]byte(`[{"key":"ssh-ed25519 AAAAauth"}]`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	info, err := (&Client{BaseURL: srv.URL, Token: "expiring"}).TokenInfo(context.Background())
+	if err != nil || info.Login != "bots" || info.Expiry == nil || info.Expiry.Format("2006-01-02") != "2027-01-31" {
+		t.Fatalf("expiring: %+v, %v", info, err)
+	}
+	info, err = (&Client{BaseURL: srv.URL, Token: "forever"}).TokenInfo(context.Background())
+	if err != nil || info.Expiry != nil {
+		t.Fatalf("forever: %+v, %v", info, err)
+	}
+	_, err = (&Client{BaseURL: srv.URL, Token: "bad"}).TokenInfo(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusUnauthorized {
+		t.Fatalf("bad token: %v", err)
+	}
+
+	c := &Client{BaseURL: srv.URL}
+	if keys, err := c.SigningKeys(context.Background(), "bots"); err != nil || len(keys) != 1 || keys[0] != "ssh-ed25519 AAAAsign" {
+		t.Fatalf("signing keys %v, %v", keys, err)
+	}
+	if keys, err := c.AuthKeys(context.Background(), "bots"); err != nil || keys[0] != "ssh-ed25519 AAAAauth" {
+		t.Fatalf("auth keys %v, %v", keys, err)
+	}
+	if _, err := c.SigningKeys(context.Background(), "../x"); err == nil {
+		t.Fatal("bad login accepted")
+	}
+	if got := KeyBlob("ssh-ed25519 AAAA comment here"); got != "ssh-ed25519 AAAA" {
+		t.Fatalf("KeyBlob = %q", got)
 	}
 }
 
