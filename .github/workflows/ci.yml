@@ -23,6 +23,9 @@ jobs:
       - run: git version && ssh -V
       - name: vet
         run: go vet ./...
+      - name: YAML is valid (action.yml is loaded by every user's workflow)
+        if: runner.os == 'Linux'
+        run: for f in action/action.yml .goreleaser.yaml .github/workflows/*.yml; do yq '.' "$f" > /dev/null || exit 1; done
       - name: gofmt
         if: runner.os == 'Linux'
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)

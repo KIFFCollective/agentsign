@@ -26,7 +26,7 @@ inputs:
     description: Require author == committer for agent commits.
     default: "false"
   require-trailer:
-    description: Require agent commits to end with an "Agent: Name <email>" trailer.
+    description: 'Require agent commits to end with an "Agent: Name <email>" trailer.'
     default: "false"
   post-statuses:
     description: >
