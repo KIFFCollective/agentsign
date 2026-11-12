@@ -26,6 +26,8 @@ Elsewhere, git runs unchanged. It also runs unchanged when the caller sets its o
 
 Inside a bot's folders, `gh` runs with the bot's own token in `GH_TOKEN`, for that one call. The token is never written to disk, and it replaces any `GH_TOKEN`/`GITHUB_TOKEN` in the environment. `gh auth login`, `logout`, `refresh`, `setup-git` and `switch` are refused for bots.
 
+The bot's repo list applies to gh as it does to git. The repo is taken from `-R`, `$GH_REPO`, URLs or `OWNER/REPO` arguments, `gh api repos/OWNER/REPO/...`, or the checkout's remotes. A repo off the list is refused. When the repo can't be worked out, gh runs without a token. That happens with `gh api graphql`, or outside a checkout with no `-R`. Bots should pass `-R OWNER/REPO` when not in a checkout.
+
 This matters because the bots share a home. A token stored by `gh auth login` (`~/.config/gh/hosts.yml`) is readable by every bot, and gh would use it with no repo limit. `agentsign doctor` warns if it finds one, or a token in the environment.
 
 Limits:

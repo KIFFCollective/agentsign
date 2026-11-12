@@ -76,6 +76,41 @@ func TestMausBotStyle(t *testing.T) {
 		t.Fatalf("gh passthrough: %q", out)
 	}
 
+	// gh honours the agent's repo list, like the credential helper.
+	e.agentsign(e.root, nil, "", "agent", "add", "bot-odin", "--name", "Odin", "--email", "odin@troupe.test", "--repo", "acme/app")
+	e.agentsign(e.root, nil, "tok-odin\n", "agent", "token", "bot-odin")
+	odinTask := filepath.Join(data, "task-workspaces", "bot-odin", "t1")
+	e.must(e.root, env, "", git, "init", "-q", odinTask)
+	e.must(odinTask, env, "", git, "remote", "add", "origin", "https://github.com/acme/app.git")
+	ghCase := func(dir string, wantToken bool, wantMsg string, args ...string) {
+		t.Helper()
+		out, err := e.run(dir, env, "", gh, args...)
+		switch {
+		case wantMsg != "" && !strings.Contains(out, wantMsg):
+			t.Errorf("gh %v: want %q in:\n%s", args, wantMsg, out)
+		case wantToken && !strings.Contains(out, "GH_TOKEN=tok-odin "):
+			t.Errorf("gh %v: want token, got (err %v):\n%s", args, err, out)
+		case !wantToken && strings.Contains(out, "tok-odin"):
+			t.Errorf("gh %v: token leaked:\n%s", args, out)
+		}
+	}
+	ghCase(odinTask, true, "", "pr", "list")                        // origin is allowed
+	ghCase(odinTask, true, "", "api", "repos/{owner}/{repo}/pulls") // placeholders: origin
+	ghCase(odinTask, true, "", "pr", "list", "-R", "acme/app")      // explicit, allowed
+	ghCase(odinTask, false, "not allowed to access acme/other", "pr", "list", "-R", "acme/other")
+	ghCase(odinTask, false, "not allowed to access acme/other", "pr", "view", "https://github.com/acme/other/pull/1")
+	ghCase(odinTask, false, "not allowed to access acme/other", "api", "repos/acme/other/pulls")
+	ghCase(odinTask, false, "isn't scoped to one repository", "api", "graphql", "-f", "query=x")
+	odinHome := filepath.Join(data, "workspaces", "bot-odin") // the bot's home: no checkout
+	ghCase(odinHome, false, "not inside a checkout", "pr", "list")
+	ghCase(odinHome, true, "", "pr", "list", "-R", "acme/app")
+	// A second remote the agent can't use: gh might pick it, so no token.
+	e.must(odinTask, env, "", git, "remote", "add", "upstream", "https://github.com/acme/other.git")
+	ghCase(odinTask, false, "not allowed to access acme/other (from remote upstream)", "pr", "list")
+	// ...unless gh repo set-default chose the allowed one.
+	e.must(odinTask, env, "", git, "config", "remote.origin.gh-resolved", "base")
+	ghCase(odinTask, true, "", "pr", "list")
+
 	// Outside the bot folders nobody is identified, and signing refuses
 	// with a pointer to doctor.
 	elsewhere := filepath.Join(e.root, "tmp-clone")

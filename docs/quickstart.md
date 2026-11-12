@@ -197,6 +197,8 @@ Agents then need nothing beyond `git` and `gh`:
 - **`git`:** when an agent is identified, it runs the real git with the agent's identity, and `git commit` adds the `Agent:` trailer. Otherwise, or when the caller sets its own `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, it runs git unchanged.
 - **`gh`:** when an agent is identified, it runs the real GitHub CLI with the agent's token in `GH_TOKEN`, for that call only, so the token never lands in `~/.config/gh/hosts.yml`. `gh auth login`, `setup-git` and similar are refused for agents. Otherwise gh runs unchanged.
 
+  For agents with a repo list, `gh` follows the same list as git. The shim works out which repos a call touches: `-R`/`--repo`, `$GH_REPO`, GitHub URLs and `gh repo <cmd> OWNER/REPO` in the arguments, `repos/OWNER/REPO/...` endpoints for `gh api`, otherwise the checkout's GitHub remotes (only the `gh repo set-default` one, if set). If any of them isn't on the list, the call is refused. If it can't tell (`gh api graphql`, or no checkout and no `-R`), gh runs without the token and says to pass `-R`.
+
 The real binaries are found on PATH (skipping agentsign itself), or pinned with `git = "..."` and `gh = "..."` in the config. `agentsign doctor` warns about stored gh tokens or `GH_TOKEN`/`GITHUB_TOKEN` in the environment, which bypass agentsign.
 
 ## Squash merges
