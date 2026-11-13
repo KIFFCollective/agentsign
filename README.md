@@ -1,5 +1,7 @@
 # agentsign
 
+> **Status:** early development. v0.1.0 is the first release; expect breaking changes before v1.0. We uh, don't even know if this is a good idea atm.
+
 Per-agent git identities on one GitHub machine account. (`agentsign` is a working name.)
 
 Each coding agent gets its own commit email, SSH signing key and fine-grained token on a single machine account (e.g. `acme-bots`). Its commits show as **Verified** on GitHub. Each commit names its agent in an `Agent:` trailer and in a per-commit status, because GitHub itself shows every agent as the shared account. A CI check then confirms that each commit was signed by the key of the agent named as committer. GitHub doesn't check that part.
@@ -10,7 +12,7 @@ Each coding agent gets its own commit email, SSH signing key and fine-grained to
 
 See [docs/SPEC.md](docs/SPEC.md) for the design and [docs/security.md](docs/security.md) for the threat model.
 
-> **Status:** early development. v0.1.0 is the first release; expect breaking changes before v1.0.
+
 
 ## Install
 
